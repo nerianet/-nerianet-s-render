@@ -5,9 +5,9 @@ import os
 app = Flask(__name__)
 
 # ===== הגדרות שצריך למלא =====
-CLIENT_ID = "520232"
-CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"
-REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"  # זו הכתובת של השרת שלך ברנדר
+CLIENT_ID = "520232"  # ה-Client ID שלך
+CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"  # ה-App Key שלך
+REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"  # כתובת השרת שלך ב-Render
 
 # כתובת האימות של עליאקספרס (שלב 1)
 AUTH_URL = (
@@ -29,8 +29,8 @@ def callback():
     if not code:
         return "❌ לא התקבל קוד אימות (missing ?code=)"
 
-    # שלב 2 – שליחת ה-code לאליאקספרס כדי לקבל access_token ו-refresh_token
-    token_url = "https://api-sg.aliexpress.com/oauth/token"
+    # === שלב 2 – בקשה ל-AliExpress לקבלת טוקנים ===
+    token_url = "https://api-sg.aliexpress.com/oauth2/token"  # ← תוקן נכון ל-Affiliate API
     data = {
         "grant_type": "authorization_code",
         "client_id": CLIENT_ID,
@@ -39,12 +39,14 @@ def callback():
         "redirect_uri": REDIRECT_URI,
     }
 
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
     try:
-        response = requests.post(token_url, data=data)
+        response = requests.post(token_url, data=data, headers=headers)
         response.raise_for_status()
         tokens = response.json()
     except Exception as e:
-        return f"❌ שגיאה בשליפת טוקנים: {e}"
+        return f"❌ שגיאה בשליפת טוקנים: {e}<br><br><pre>{response.text if 'response' in locals() else ''}</pre>"
 
     print("========== TOKENS ==========")
     print(tokens)
@@ -58,13 +60,12 @@ def callback():
         <h3>✅ קיבלת בהצלחה את הטוקנים!</h3>
         <p><b>Access Token:</b> {access_token}</p>
         <p><b>Refresh Token:</b> {refresh_token}</p>
-        <p>העתק את הערכים האלו לקובץ tokens.json במחשב שלך.</p>
+        <p>📄 העתק את הערכים האלו לקובץ <b>tokens.json</b> במחשב שלך.</p>
         <hr>
-        <p>בדוק גם בלוגים של Render — שם תראה את ההדפסה המלאה של התגובה.</p>
+        <p>בדוק גם בלוגים של Render — שם תראה את ההדפסה המלאה של התגובה מהשרת.</p>
         """
     else:
         return f"<h3>⚠️ לא נמצאו טוקנים בתגובה</h3><pre>{tokens}</pre>"
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
