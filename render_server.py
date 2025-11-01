@@ -29,23 +29,27 @@ def callback():
     if not code:
         return "❌ לא התקבל קוד אימות (missing ?code=)"
 
-    # === שלב 2 – בקשת טוקנים (GET) ===
-    token_url = (
-        "https://api-sg.aliexpress.com/oauth2/access_token"
-        f"?grant_type=authorization_code"
-        f"&client_id={CLIENT_ID}"
-        f"&client_secret={CLIENT_SECRET}"
-        f"&redirect_uri={REDIRECT_URI}"
-        f"&code={code}"
-        f"&need_refresh_token=true"
-    )
+    # === שלב 2 – בקשת טוקנים (POST) ===
+    token_url = "https://api-sg.aliexpress.com/oauth/token"
+    data = {
+        "grant_type": "authorization_code",
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "code": code,
+        "redirect_uri": REDIRECT_URI,
+        "need_refresh_token": "true"
+    }
 
     try:
-        response = requests.get(token_url)
+        response = requests.post(token_url, data=data)
         response.raise_for_status()
         tokens = response.json()
     except Exception as e:
-        return f"❌ שגיאה בשליפת טוקנים: {e}<br><br><pre>{response.text if 'response' in locals() else ''}</pre>"
+        return f"""
+        ❌ שגיאה בשליפת טוקנים: {e}
+        <br><br>
+        <pre>{response.text if 'response' in locals() else ''}</pre>
+        """
 
     print("========== TOKENS ==========")
     print(tokens)
