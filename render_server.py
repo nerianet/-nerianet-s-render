@@ -5,9 +5,9 @@ import os
 app = Flask(__name__)
 
 # ===== הגדרות שצריך למלא =====
-CLIENT_ID = "520232"  # ה-Client ID שלך
-CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"  # ה-App Key שלך
-REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"  # כתובת השרת שלך ב-Render
+CLIENT_ID = "520232"  # App Key שלך
+CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"  # App Secret שלך
+REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"
 
 # כתובת האימות של עליאקספרס (שלב 1)
 AUTH_URL = (
@@ -29,8 +29,9 @@ def callback():
     if not code:
         return "❌ לא התקבל קוד אימות (missing ?code=)"
 
-    # === שלב 2 – בקשה ל-AliExpress לקבלת טוקנים ===
-    token_url = "https://api-sg.aliexpress.com/oauth2/accessToken"  # ← הנתיב הנכון
+    # === שלב 2 – בקשת טוקנים ===
+    token_url = "https://api-sg.aliexpress.com/oauth/token"
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
     data = {
         "grant_type": "authorization_code",
         "need_refresh_token": "true",
@@ -40,10 +41,8 @@ def callback():
         "code": code,
     }
 
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-
     try:
-        response = requests.post(token_url, data=data, headers=headers)
+        response = requests.post(token_url, headers=headers, data=data)
         response.raise_for_status()
         tokens = response.json()
     except Exception as e:
@@ -61,12 +60,12 @@ def callback():
         <h3>✅ קיבלת בהצלחה את הטוקנים!</h3>
         <p><b>Access Token:</b> {access_token}</p>
         <p><b>Refresh Token:</b> {refresh_token}</p>
-        <p>📄 העתק את הערכים האלו לקובץ <b>tokens.json</b> במחשב שלך.</p>
+        <p>העתק את הערכים האלו לקובץ tokens.json במחשב שלך.</p>
         <hr>
-        <p>בדוק גם בלוגים של Render — שם תראה את ההדפסה המלאה של התגובה מהשרת.</p>
+        <p>בדוק גם בלוגים של Render — שם תראה את ההדפסה המלאה של התגובה.</p>
         """
     else:
         return f"<h3>⚠️ לא נמצאו טוקנים בתגובה</h3><pre>{tokens}</pre>"
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
