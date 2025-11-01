@@ -9,7 +9,7 @@ CLIENT_ID = "520232"  # App Key שלך
 CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"  # App Secret שלך
 REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"
 
-# כתובת האימות של עליאקספרס (שלב 1)
+# שלב 1 – קישור לאימות
 AUTH_URL = (
     f"https://auth.aliexpress.com/oauth/authorize?"
     f"response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&state=1234"
@@ -29,20 +29,19 @@ def callback():
     if not code:
         return "❌ לא התקבל קוד אימות (missing ?code=)"
 
-    # === שלב 2 – בקשת טוקנים ===
-    token_url = "https://api-sg.aliexpress.com/oauth/token"
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    data = {
-        "grant_type": "authorization_code",
-        "need_refresh_token": "true",
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "redirect_uri": REDIRECT_URI,
-        "code": code,
-    }
+    # === שלב 2 – בקשת טוקנים (GET) ===
+    token_url = (
+        "https://api-sg.aliexpress.com/oauth2/access_token"
+        f"?grant_type=authorization_code"
+        f"&client_id={CLIENT_ID}"
+        f"&client_secret={CLIENT_SECRET}"
+        f"&redirect_uri={REDIRECT_URI}"
+        f"&code={code}"
+        f"&need_refresh_token=true"
+    )
 
     try:
-        response = requests.post(token_url, headers=headers, data=data)
+        response = requests.get(token_url)
         response.raise_for_status()
         tokens = response.json()
     except Exception as e:
