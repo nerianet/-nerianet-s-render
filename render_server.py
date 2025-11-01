@@ -5,8 +5,8 @@ import os
 app = Flask(__name__)
 
 # ===== הגדרות שצריך למלא =====
-CLIENT_ID = "הכנס_כאן_את_CLIENT_ID_שלך"
-CLIENT_SECRET = "הכנס_כאן_את_CLIENT_SECRET_שלך"
+CLIENT_ID = "520232"
+CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"
 REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"  # זו הכתובת של השרת שלך ברנדר
 
 # כתובת האימות של עליאקספרס (שלב 1)
@@ -67,3 +67,4 @@ def callback():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
