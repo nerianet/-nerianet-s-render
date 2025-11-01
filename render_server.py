@@ -30,13 +30,14 @@ def callback():
         return "❌ לא התקבל קוד אימות (missing ?code=)"
 
     # === שלב 2 – בקשה ל-AliExpress לקבלת טוקנים ===
-    token_url = "https://api-sg.aliexpress.com/oauth2/token"  # ← תוקן נכון ל-Affiliate API
+    token_url = "https://api-sg.aliexpress.com/oauth2/accessToken"  # ← הנתיב הנכון
     data = {
         "grant_type": "authorization_code",
+        "need_refresh_token": "true",
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
-        "code": code,
         "redirect_uri": REDIRECT_URI,
+        "code": code,
     }
 
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
