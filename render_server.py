@@ -24,23 +24,26 @@ AUTH_URL = (
 TOKEN_URL = "https://api-sg.aliexpress.com/rest" 
 
 # !!! הפיצול שנקבע:
-# 1. השם המלא - לחישוב החתימה (Method Full Name for Signature)
+# 1. השם המלא - לחישוב החתימה (Method Full Name for Signature) - יישלח כ-prepend
 API_METHOD_FULL_NAME = "aliexpress.trade.auth.token.create" 
-# 2. הנתיב הקצר - לשליחה ב-JSON (Method Path for Request Body)
+# 2. הנתיב הקצר - לשליחה ב-JSON (Method Path for Request Body) - יישלח כפרמטר
 API_METHOD_PATH_NAME = "/auth/token/create"
 
 # --- פונקציה לחישוב חתימת API (Signature) באמצעות HMAC-SHA256 ---
 def generate_top_sign(params, secret, method_full_name):
     """
     מחשבת חתימת HMAC-SHA256 על פי פרוטוקול TOP API.
+    
+    שינוי: הפרמטר 'method' (הנתיב הקצר) לא מסונן החוצה, אלא נשאר לחתימה.
     """
-    # 1. סינון פרמטרים לחתימה - מוציאים את ה-method ואת הפרמטר הסודי
+    # 1. סינון פרמטרים לחתימה - מוציאים רק את אלו שלא צריכים להיחתם
+    # עכשיו, 'method' (שמכיל את /auth/token/create) נשאר בתוך params_to_sign
     params_to_sign = {
         k: v for k, v in params.items() 
-        if k not in ['sign', 'client_secret', 'sign_method', 'method'] 
+        if k not in ['sign', 'client_secret', 'sign_method'] 
     }
     
-    # 2. מיון הפרמטרים הנותרים (ללא method) לפי סדר אלפביתי
+    # 2. מיון הפרמטרים הנותרים לפי סדר אלפביתי
     sorted_params = sorted(params_to_sign.items())
     
     # 3. שרשור הפרמטרים לפורמט 'keyvaluekeyvalue...'
@@ -49,10 +52,10 @@ def generate_top_sign(params, secret, method_full_name):
         concatenated_body += f"{k}{str(v)}"
 
     # 4. יצירת המחרוזת לחישוב: משרשרים את המתודה המלאה בתחילה
+    # המחרוזת כעת תכיל: aliexpress.trade.auth.token.create...method/auth/token/create...
     data_to_sign_raw = method_full_name + concatenated_body
     
     # 5. חישוב חתימת HMAC-SHA256
-    # קידוד ל-UTF-8 הוא חובה במערכות TOP API
     hashed = hmac.new(
         secret.encode('utf-8'), 
         data_to_sign_raw.encode('utf-8'), 
@@ -113,6 +116,8 @@ def callback():
             "code": code,
             "redirect_uri": REDIRECT_URI, 
             "need_refresh_token": "true",
+            # מוסיפים את הנתיב הקצר לנתוני החתימה (שימוש כפול)
+            "method": API_METHOD_PATH_NAME, 
         }
         
         # 2. חישוב החתימה (משרשר את המתודה המלאה בתחילה)
@@ -122,9 +127,8 @@ def callback():
             API_METHOD_FULL_NAME 
         )
 
-        # 3. הכנת הנתונים לשליחה (משתמשים בנתיב הקצר)
+        # 3. הכנת הנתונים לשליחה (מוציאים את ה-client_secret ומוסיפים את ה-sign)
         post_data = {k: v for k, v in data_for_sign.items() if k != 'client_secret'}
-        post_data["method"] = API_METHOD_PATH_NAME 
         post_data["sign"] = calculated_sign
         
         # 4. הוספת השהייה קצרה (1.5 שניות) כדי לעקוף את ApiCallLimit
@@ -167,7 +171,7 @@ def callback():
     log_html = f"""
     <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
         <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
-        <p><strong>שיטת חתימה:</strong> <code>TOP API HMAC-SHA256 (Final Final Signature Attempt - URI Encoded)</code></p>
+        <p><strong>שיטת חתימה:</strong> <code>TOP API HMAC-SHA256 (Final Attempt - Including 'method')</code></p>
         <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
         <p><strong>Method הנשלח (Path Name):</strong> <code>{API_METHOD_PATH_NAME}</code></p>
         <p><strong>Method לחתימה (Full Name):</strong> <code>{API_METHOD_FULL_NAME}</code></p>
@@ -175,7 +179,7 @@ def callback():
         <h5>JSON שנשלח (Form Data - ללא client_secret):</h5>
         <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(post_data, indent=2)}</pre>
 
-        <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign - Method Prepended, URI Original):</h5>
+        <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign - Method Prepended, URI Original, Including 'method' parameter):</h5>
         <pre style="background-color: #fce8e8; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
         
         <h5>החתימה שחושבה (Calculated SIGN):</h5>
