@@ -33,8 +33,6 @@ API_METHOD_PATH_NAME = "/auth/token/create"
 def generate_top_sign(params, secret, method_full_name):
     """
     מחשבת חתימת HMAC-SHA256 על פי פרוטוקול TOP API.
-    
-    שינוי: ה-redirect_uri אינו עובר unquote. חותמים על המחרוזת כפי שהיא נשלחה.
     """
     # 1. סינון פרמטרים לחתימה - מוציאים את ה-method ואת הפרמטר הסודי
     params_to_sign = {
@@ -113,7 +111,7 @@ def callback():
             "grant_type": "authorization_code",
             "client_secret": CLIENT_SECRET, 
             "code": code,
-            "redirect_uri": REDIRECT_URI, # נשלח כפי שהוא, לא מנוקה
+            "redirect_uri": REDIRECT_URI, 
             "need_refresh_token": "true",
         }
         
@@ -121,20 +119,22 @@ def callback():
         calculated_sign, data_to_sign_raw = generate_top_sign(
             data_for_sign, 
             CLIENT_SECRET,
-            API_METHOD_FULL_NAME # העברת המתודה במפורש
+            API_METHOD_FULL_NAME 
         )
 
         # 3. הכנת הנתונים לשליחה (משתמשים בנתיב הקצר)
-        # מוציאים את ה-client_secret ומוסיפים את ה-sign ואת הנתיב הקצר
         post_data = {k: v for k, v in data_for_sign.items() if k != 'client_secret'}
         post_data["method"] = API_METHOD_PATH_NAME 
         post_data["sign"] = calculated_sign
         
-        # 4. ביצוע בקשת ה-POST
+        # 4. הוספת השהייה קצרה (1.5 שניות) כדי לעקוף את ApiCallLimit
+        time.sleep(1.5) 
+        
+        # 5. ביצוע בקשת ה-POST
         response = requests.post(TOKEN_URL, data=post_data) 
         response_text = response.text
         
-        # 5. ניתוח תגובת TOP API
+        # 6. ניתוח תגובת TOP API
         full_response = response.json()
 
         # בדיקה לשגיאה כללית
@@ -186,7 +186,7 @@ def callback():
     </div>
     """
     
-    # 6. קוד הצלחה / שגיאה סופי
+    # 7. קוד הצלחה / שגיאה סופי
     access_token = tokens.get("access_token")
     refresh_token = tokens.get("refresh_token")
 
