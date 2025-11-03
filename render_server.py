@@ -1,3 +1,4 @@
+# render_server.py
 from flask import Flask, request
 import requests
 import os
@@ -16,19 +17,16 @@ REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"
 # כתובת API ליצירת Access Token
 TOKEN_URL = "https://api-sg.aliexpress.com/rest/auth/token/create"
 
-# --- פונקציה לחישוב חתימה לפי AliExpress TOP API ---
+# --- פונקציה לחישוב חתימה לפי HMAC_SHA256 ---
 def generate_top_sign(params, secret):
-    """
-    חתימה לפי סטנדרט HMAC_SHA256 של AliExpress
-    """
     sorted_params = sorted(params.items())
     concatenated = secret + ''.join(f"{k}{v}" for k, v in sorted_params) + secret
     hashed = hmac.new(secret.encode('utf-8'), concatenated.encode('utf-8'), hashlib.sha256)
     return hashed.hexdigest().upper()
 
+# --- עמוד הבית: קישור הרשאה ---
 @app.route('/')
 def index():
-    # קישור הרשאה מדויק לפי הדוקומנטציה
     auth_url = (
         f"https://api-sg.aliexpress.com/oauth/authorize"
         f"?response_type=code"
@@ -37,28 +35,30 @@ def index():
         f"&client_id={CLIENT_ID}"
     )
     return f"""
-    <h2>AliExpress OAuth</h2>
-    <a href='{auth_url}'>התחבר לחשבון AliExpress</a>
+    <h2>AliExpress Seller Authorization</h2>
+    <p>לחץ על הקישור כדי להיכנס ולהרשות את האפליקציה:</p>
+    <a href='{auth_url}' target='_blank'>{auth_url}</a>
     """
 
+# --- Callback: קבלת Authorization Code והחלפתו ל-Access Token ---
 @app.route('/callback')
 def callback():
     code = request.args.get('code')
     if not code:
         return "שגיאה: לא התקבל קוד."
 
-    # פרמטרים ליצירת Access Token
+    timestamp = str(int(time.time() * 1000))
     params = {
         "app_key": CLIENT_ID,
-        "timestamp": str(int(time.time() * 1000)),
-        "sign_method": "HMAC_SHA256",
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": REDIRECT_URI,
         "need_refresh_token": "true",
+        "timestamp": timestamp,
+        "sign_method": "HMAC_SHA256"
     }
 
-    # יצירת חתימה
+    # חישוב החתימה
     sign = generate_top_sign(params, CLIENT_SECRET)
     params["sign"] = sign
 
@@ -68,12 +68,7 @@ def callback():
     except Exception as e:
         return f"שגיאה בבקשה: {e}"
 
-    # הצגת התוצאה בדפדפן
-    return f"<pre>{json.dumps(data, indent=2, ensure_ascii=False)}</pre>"
+    return f"<h2>Access Token Response</h2><pre>{json.dumps(data, indent=2, ensure_ascii=False)}</pre>"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-
-# --- requirements.txt ---
-# flask
-# requests
