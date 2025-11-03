@@ -4,13 +4,14 @@ import os
 import hashlib
 import hmac
 import time
-import json # ייבוא חדש לטובת הצגת JSON יפה
+import json 
 
 app = Flask(__name__)
 
 # ===== הגדרות שצריך למלא =====
-CLIENT_ID = "520232"  # App Key שלך
-CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"  # App Secret שלך
+# הערכים האלה נבדקו ואומתו כנכונים על ידך
+CLIENT_ID = "520232"  
+CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"  
 REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"
 
 # הגדרת כתובות ה-API
@@ -21,39 +22,39 @@ AUTH_URL = (
 TOKEN_URL = "https://oauth.aliexpress.com/token" 
 API_METHOD_PATH = "aliexpress.trade.auth.token.create"
 
-# --- פונקציה לחישוב חתימת API (Signature) ---
-def generate_sign(params, secret, method_name):
+# --- פונקציה לחישוב חתימת API (Signature) באמצעות MD5 ---
+def generate_md5_sign(params, secret, method_name):
     """
-    מחשבת חתימת HMAC-SHA256 ל-AliExpress API.
-    הנוסחה: SIGN = HMAC_SHA256(SECRET, API_METHOD_NAME + סדר הפרמטרים)
+    מחשבת חתימת MD5 בפורמט TOP.
+    הנוסחה: SIGN = MD5(SECRET + סדר הפרמטרים + SECRET)
     """
-    # 1. מיון הפרמטרים לפי סדר אלפביתי (ללא 'sign' ו-client_secret)
-    # **שינוי קריטי:** הסרת client_secret ממחרוזת החתימה, גם אם הוא נשלח בבקשה.
+    # 1. מיון הפרמטרים לפי סדר אלפביתי (ללא 'sign' ו-'client_secret')
+    # למרות ש-client_secret נשלח בנתונים, הוא לא נכנס למחרוזת החתימה
     params_for_sign = {
         k: v for k, v in params.items() 
         if k != 'sign' and k != 'client_secret'
     }
+    
+    # הוספת פרמטרים ייחודיים ל-OAuth
+    params_for_sign['method'] = method_name
+    
+    # מיון
     sorted_params = sorted(params_for_sign.items())
     
     # 2. שרשור הפרמטרים
     concatenated_string = ""
     for k, v in sorted_params:
-        # ודא שכל ערך מומר למחרוזת לפני השרשור
         concatenated_string += f"{k}{str(v)}"
     
-    # 3. יצירת המחרוזת לחתימה: METHOD_NAME + CONCATENATED_PARAMS
-    data_to_sign = method_name + concatenated_string
+    # 3. יצירת המחרוזת לחתימה: SECRET + CONCATENATED_PARAMS + SECRET
+    data_to_sign_raw = secret + concatenated_string + secret
     
-    # 4. חישוב חתימת HMAC-SHA256
-    hashed = hmac.new(
-        secret.encode('utf-8'),
-        data_to_sign.encode('utf-8'),
-        hashlib.sha256
-    )
+    # 4. חישוב חתימת MD5
+    hashed = hashlib.md5(data_to_sign_raw.encode('utf-8'))
     
     # 5. המרת התוצאה להקסה (hex) ורישום באותיות גדולות (Uppercase)
     sign = hashed.hexdigest().upper()
-    return sign, data_to_sign
+    return sign, data_to_sign_raw
 
 # --- Flask Routes ---
 
@@ -85,19 +86,19 @@ def callback():
     token_params = {
         "grant_type": "authorization_code",
         "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET, # נשלח ב-Form Data
+        "client_secret": CLIENT_SECRET, # נשלח ב-Form Data (חובה עבור AliExpress)
         "code": code,
         "redirect_uri": REDIRECT_URI,
         "need_refresh_token": "true",
         "timestamp": int(time.time() * 1000), 
-        "method": API_METHOD_PATH, 
         "v": "2.0", 
     }
     
     # 2. חישוב החתימה
-    # generate_sign משתמשת ב-CLIENT_SECRET כמפתח, אך לא מכלילה אותו במחרוזת הנתונים שחותמים עליה.
-    calculated_sign, data_to_sign_raw = generate_sign(token_params, CLIENT_SECRET, API_METHOD_PATH)
+    # generate_md5_sign משתמשת ב-MD5 ובשיטת SECRET + DATA + SECRET.
+    calculated_sign, data_to_sign_raw = generate_md5_sign(token_params, CLIENT_SECRET, API_METHOD_PATH)
     token_params["sign"] = calculated_sign
+    token_params["method"] = API_METHOD_PATH
     
     # 3. ביצוע בקשת ה-POST
     response = None
@@ -120,7 +121,7 @@ def callback():
             <h5>JSON שנשלח (Form Data):</h5>
             <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(token_params, indent=2)}</pre>
 
-            <h5>מחרוזת גולמית לחתימה (Data to Sign):</h5>
+            <h5>מחרוזת גולמית לחתימה (Data to Sign - כולל הסוד):</h5>
             <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
             
             <h5>החתימה שחושבה (Calculated SIGN):</h5>
