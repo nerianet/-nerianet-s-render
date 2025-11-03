@@ -47,11 +47,10 @@ def generate_hmac_sha256_sign(params, secret, method_name):
         concatenated_string += f"{k}{str(v)}"
 
     # 4. יצירת המחרוזת לחתימה: SECRET + Method Name + CONCATENATED_PARAMS + SECRET
-    # זהו הכלל הספציפי ששבר אותנו עד עכשיו.
     data_to_sign_raw = secret + method_name + concatenated_string + secret
     
     # 5. חישוב חתימת HMAC-SHA256
-    # שימו לב: המפתח ל-HMAC הוא עדיין רק ה-SECRET, אבל ה-SECRET נכלל גם ב-data_to_sign_raw.
+    # המפתח ל-HMAC הוא ה-SECRET, אבל ה-SECRET נכלל גם ב-data_to_sign_raw.
     hashed = hmac.new(
         secret.encode('utf-8'),
         data_to_sign_raw.encode('utf-8'),
@@ -80,57 +79,105 @@ def index():
 @app.route('/callback')
 def callback():
     code = request.args.get('code')
-    if not code:
-        return """
-        <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff0f0; border: 1px solid #ffdddd; border-radius: 10px;">
-            <h3 style="color: #d9534f;">❌ שגיאה: לא התקבל קוד אימות</h3>
-            <p>חסר פרמטר <code>?code=</code> בכתובת.</p>
-        </div>
-        """
-
-    # 1. הכנת הפרמטרים הנדרשים (כולל client_secret בתוך הנתונים)
+    
+    # 1. הכנת הפרמטרים הנדרשים (גם אם יש שגיאה, אנחנו צריכים את הנתונים לדיבוג)
     token_params = {
         "grant_type": "authorization_code",
         "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET, # נשלח ב-Form Data (חובה עבור AliExpress)
-        "code": code,
+        "client_secret": CLIENT_SECRET,
+        "code": code if code else "NO_CODE_PROVIDED",
         "redirect_uri": REDIRECT_URI,
         "need_refresh_token": "true",
         "timestamp": int(time.time() * 1000), 
         "v": "2.0", 
-        "method": API_METHOD_PATH, # נשלח ב-Form Data
+        "method": API_METHOD_PATH,
     }
-    
-    # 2. חישוב החתימה
-    # ה-SECRET נכלל עכשיו במחרוזת החתימה (data_to_sign_raw)
+
+    # 2. אם חסר קוד, מציגים שגיאה פשוטה ויוצאים
+    if not code:
+        return f"""
+        <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff0f0; border: 1px solid #ffdddd; border-radius: 10px;">
+            <h3 style="color: #d9534f;">❌ שגיאה: לא התקבל קוד אימות</h3>
+            <p>חסר פרמטר <code>?code=</code> בכתובת. ודא שהאפליקציה אושרה.</p>
+        </div>
+        """
+
+    # 3. חישוב החתימה
     calculated_sign, data_to_sign_raw = generate_hmac_sha256_sign(token_params, CLIENT_SECRET, API_METHOD_PATH)
     token_params["sign"] = calculated_sign
     
-    # 3. ביצוע בקשת ה-POST
+    # 4. ביצוע בקשת ה-POST
     response = None
+    tokens = {}
+    response_text = "אין תגובה מהשרת."
+    error_msg = "שגיאה לא ידועה."
+
     try:
         response = requests.post(TOKEN_URL, data=token_params)
-        response.raise_for_status() 
+        response_text = response.text
         tokens = response.json()
         
+        # אם יש שגיאה מפורשת בתוך ה-JSON, משתמשים בה
+        if 'error_msg' in tokens:
+            error_msg = tokens['error_msg']
+            raise Exception(error_msg) # מעבירים לבלוק ה-except
+        
+        response.raise_for_status() 
+        
     except Exception as e:
-        # בדיקה אם יש תגובה (גם אם הסטטוס קוד הוא 4xx או 5xx)
-        response_text = response.text if response is not None else "אין תגובה מהשרת."
+        error_msg = str(e)
         
-        # ניסיון לפרסר את השגיאה אם היא JSON
-        try:
-            error_json = json.loads(response_text)
-            error_msg = error_json.get('error_msg', str(e))
-        except json.JSONDecodeError:
-            error_msg = str(e)
-            
-        error_message_display = f"❌ שגיאה בשליפת טוקנים: {error_msg}"
-        
-        # --- הצגת לוגים מפורטים בדפדפן ---
+        # יצירת ה-HTML של נתוני הדיבוג (DEBUG) 
         log_html = f"""
         <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
             <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
-            <p style="text-align: center;"><strong>שגיאה שהתקבלה:</strong> <code>{error_msg}</code></p>
+            <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
+            
+            <h5>JSON שנשלח (Form Data):</h5>
+            <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(token_params, indent=2)}</pre>
+
+            <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign):</h5>
+            <pre style="background-color: #fce8e8; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
+            
+            <h5>החתימה שחושבה (Calculated SIGN):</h5>
+            <code style="display: block; background-color: #e0e0ff; padding: 5px; border-radius: 3px; font-weight: bold; word-break: break-all;">{calculated_sign}</code>
+
+            <h5>תוכן התגובה הגולמי:</h5>
+            <pre style="background-color: #fdd; padding: 10px; border-radius: 5px; overflow-x: auto;">{response_text}</pre>
+        </div>
+        """
+        
+        # מחזירים דף שגיאה עם נתוני הדיבוג
+        return f"""
+        <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff0f0; border: 1px solid #ffdddd; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+            <h3 style="color: #d9534f;">❌ שגיאה בשליפת טוקנים: {error_msg}</h3>
+            {log_html}
+        </div>
+        """
+
+    # 5. קוד הצלחה אם מתקבלים טוקנים
+    access_token = tokens.get("access_token")
+    refresh_token = tokens.get("refresh_token")
+
+    if access_token and refresh_token:
+        # הצגת הטוקנים
+        return f"""
+        <div style="font-family: Arial, sans-serif; text-align: center; padding: 30px; background-color: #e6ffe6; border: 1px solid #ccffcc; border-radius: 15px; box-shadow: 0 6px 12px rgba(40,167,69,0.2);">
+            <h3 style="color: #28a745; font-size: 1.5em;">✅ קיבלת בהצלחה את הטוקנים!</h3>
+            <p style="margin-top: 20px; text-align: left; padding: 0 10%; font-size: 1.1em;">
+                <b style="color: #007bff;">Access Token:</b> <code style="display: block; background-color: #fff; padding: 8px; border-radius: 4px; border: 1px solid #ccc; word-break: break-all;">{access_token}</code>
+            </p>
+            <p style="margin-top: 10px; text-align: left; padding: 0 10%; font-size: 1.1em;">
+                <b style="color: #17a2b8;">Refresh Token:</b> <code style="display: block; background-color: #fff; padding: 8px; border-radius: 4px; border: 1px solid #ccc; word-break: break-all;">{refresh_token}</code>
+            </p>
+            <p style="margin-top: 25px; font-weight: bold; color: #333;">העתק את הערכים האלו לשימוש בקוד הפייתון הראשי שלך!</p>
+        </div>
+        """
+    else:
+        # טיפול במקרה של תגובה מוצלחת (סטטוס 200) אך ללא טוקנים ב-JSON
+        log_html = f"""
+        <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
+            <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
             <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
             
             <h5>JSON שנשלח (Form Data):</h5>
@@ -148,39 +195,11 @@ def callback():
         """
         
         return f"""
-        <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff0f0; border: 1px solid #ffdddd; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
-            <h3 style="color: #d9534f;">{error_message_display}</h3>
-            {log_html}
-        </div>
-        """
-
-    # ... (קוד הצלחה אם מתקבלים טוקנים) ...
-    access_token = tokens.get("access_token")
-    refresh_token = tokens.get("refresh_token")
-
-    if access_token and refresh_token:
-        # הצגת הטוקנים
-        return f"""
-        <div style="font-family: Arial, sans-serif; text-align: center; padding: 30px; background-color: #e6ffe6; border: 1px solid #ccffcc; border-radius: 15px; box-shadow: 0 6px 12px rgba(40,167,69,0.2);">
-            <h3 style="color: #28a745; font-size: 1.5em;">✅ קיבלת בהצלחה את הטוקנים!</h3>
-            <p style="margin-top: 20px; text-align: left; padding: 0 10%; font-size: 1.1em;">
-                <b style="color: #007bff;">Access Token:</b> <code style="display: block; background-color: #fff; padding: 8px; border-radius: 4px; border: 1px solid #ccc; word-break: break-all;">{access_token}</code>
-            </p>
-            <p style="margin-top: 10px; text-align: left; padding: 0 10%; font-size: 1.1em;">
-                <b style="color: #17a2b8;">Refresh Token:</b> <code style="display: block; background-color: #fff; padding: 8px; border-radius: 4px; border: 1px solid #ccc; word-break: break-all;">{refresh_token}</code>
-            </p>
-            <p style="margin-top: 25px; font-weight: bold; color: #333;">העתק את הערכים האלו לשימוש בקוד הפייתון הראשי שלך!</p>
-            <hr style="margin-top: 20px; border-color: #ccc;">
-            <p style="font-size: 0.9em; color: #666;">בדוק גם בלוגים של Render – שם תראה את ההדפסה המלאה של התגובה (למקרה שתצטרך אותה).</p>
-        </div>
-        """
-    else:
-        # טיפול במקרה של תגובה מוצלחת (סטטוס 200) אך ללא טוקנים ב-JSON
-        return f"""
         <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff8e1; border: 1px solid #ffe0b2; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
             <h3 style="color: #ff9800;">⚠️ לא נמצאו טוקנים בתגובה</h3>
             <p style="color: #333;">תוכן התגובה המלאה (JSON):</p>
             <pre style="text-align: left; background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto;">{json.dumps(tokens, indent=2)}</pre>
+            {log_html}
         </div>
         """
 
