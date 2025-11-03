@@ -5,7 +5,6 @@ import hashlib
 import hmac
 import time
 import json
-import urllib.parse
 
 app = Flask(__name__)
 
@@ -14,52 +13,49 @@ CLIENT_ID = os.environ.get("ALI_CLIENT_ID", "520232")
 CLIENT_SECRET = os.environ.get("ALI_CLIENT_SECRET", "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2")
 REDIRECT_URI = os.environ.get("REDIRECT_URI", "https://nerianet-render-callback-ali.onrender.com/callback")
 
-# כתובת ה־API הרשמית ליצירת טוקן
+# כתובת ה-API לבקשת טוקן
 TOKEN_URL = "https://api-sg.aliexpress.com/rest/auth/token/create"
 
-# --- פונקציה לחישוב חתימה לפי תקן AliExpress ---
+# --- פונקציה לחישוב חתימה (גרסה מעודכנת לפי המסמך הרשמי) ---
 def generate_top_sign(params, secret):
     """
-    לפי הסטנדרט הרשמי של AliExpress TOP API:
-    sign = HMAC_SHA256(secret, secret + (key1value1key2value2...) + secret)
-    * הסדר לפי מפתחות (ascending)
-    * חלק מהערכים צריכים להיות URL-encoded (כולל redirect_uri)
+    חישוב HMAC-SHA256 לפי תקן TOP API המעודכן:
+    - ממיינים לפי מפתח (key)
+    - מחברים key + value רצוף
+    - חותמים ישירות על המחרוזת בעזרת secret (לא מוסיפים secret בתחילה ובסוף)
     """
     sorted_params = sorted(params.items())
-    concatenated = ''.join(f"{k}{urllib.parse.quote(str(v), safe='')}" for k, v in sorted_params)
-    string_to_sign = f"{secret}{concatenated}{secret}"
-    sign = hmac.new(secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest().upper()
+    concatenated = ''.join(f"{k}{v}" for k, v in sorted_params)
+    sign = hmac.new(secret.encode('utf-8'), concatenated.encode('utf-8'), hashlib.sha256).hexdigest().upper()
     return sign
+
 
 @app.route('/')
 def index():
     auth_url = (
-        "https://auth.aliexpress.com/oauth/authorize?"
+        f"https://auth.aliexpress.com/oauth/authorize?"
         f"response_type=code&client_id={CLIENT_ID}"
-        f"&redirect_uri={urllib.parse.quote(REDIRECT_URI, safe='')}"
-        "&state=nerianet_demo"
+        f"&redirect_uri={REDIRECT_URI}&state=1234"
     )
     return f"""
-    <html>
-    <head><title>AliExpress OAuth</title></head>
-    <body style="font-family:Arial; text-align:center; margin-top:100px;">
-        <h2>🔗 התחברות לחשבון AliExpress</h2>
-        <p>לחץ על הכפתור כדי להתחבר:</p>
-        <a href="{auth_url}" style="font-size:18px; background:#f44336; color:white; padding:10px 20px; text-decoration:none; border-radius:6px;">התחבר לחשבון AliExpress</a>
-    </body>
-    </html>
+    <div style="font-family:Arial;text-align:center;margin-top:50px;">
+        <h2>💡 התחברות ל-AliExpress API</h2>
+        <p>לחץ על הכפתור למטה כדי להתחבר לחשבון שלך ולקבל Access Token:</p>
+        <a href="{auth_url}" style="padding:10px 20px;background:#FF6600;color:white;border-radius:8px;text-decoration:none;">התחבר עכשיו</a>
+    </div>
     """
+
 
 @app.route('/callback')
 def callback():
     code = request.args.get('code')
     if not code:
-        return "❌ שגיאה: לא התקבל קוד הרשאה."
+        return "<h3 style='color:red'>❌ שגיאה: לא התקבל קוד אימות מהשרת</h3>"
 
-    timestamp = str(int(time.time() * 1000))
+    # יצירת הפרמטרים לבקשת ה-token
     params = {
         "app_key": CLIENT_ID,
-        "timestamp": timestamp,
+        "timestamp": str(int(time.time() * 1000)),
         "sign_method": "HMAC_SHA256",
         "grant_type": "authorization_code",
         "code": code,
@@ -67,31 +63,32 @@ def callback():
         "need_refresh_token": "true",
     }
 
-    # חישוב החתימה לפי התקן המעודכן
+    # חישוב החתימה
     sign = generate_top_sign(params, CLIENT_SECRET)
     params["sign"] = sign
 
-    print("=== DEBUG MODE ===")
-    print("POST URL:", TOKEN_URL)
-    print("Form Data Sent:", json.dumps(params, indent=2, ensure_ascii=False))
-
     try:
-        response = requests.post(TOKEN_URL, data=params, timeout=10)
+        # בקשת POST אל AliExpress
+        response = requests.post(TOKEN_URL, data=params, timeout=15)
+        response.raise_for_status()
         data = response.json()
     except Exception as e:
-        return f"<h3>❌ שגיאה בבקשה:</h3><pre>{str(e)}</pre>"
+        return f"<h3 style='color:red'>❌ שגיאה בשליחת בקשה: {e}</h3>"
 
-    # הצגה יפה של תוצאת ה־API בדפדפן
+    # הצגה יפה של תוצאות ה-API
     return f"""
-    <html>
-    <head><title>AliExpress Token Result</title></head>
-    <body style="font-family:Arial; margin:40px;">
-        <h2>✅ תוצאת קריאת ה־API:</h2>
-        <pre style="background:#f4f4f4; padding:15px; border-radius:8px;">{json.dumps(data, indent=2, ensure_ascii=False)}</pre>
-    </body>
-    </html>
+    <div style="font-family:Arial; margin:20px;">
+        <h3>✅ תוצאת קריאת ה־API:</h3>
+        <pre style="background:#f4f4f4;padding:10px;border-radius:8px;">{json.dumps(data, indent=2, ensure_ascii=False)}</pre>
+
+        <h4>🔍 פרטי הדיבוג (Debug Info):</h4>
+        <pre style="background:#eef;padding:10px;border-radius:8px;">
+POST URL: {TOKEN_URL}
+Form Data: {json.dumps(params, indent=2, ensure_ascii=False)}
+        </pre>
+    </div>
     """
 
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
