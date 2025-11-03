@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import time
 import json 
+from urllib.parse import unquote
 
 app = Flask(__name__)
 
@@ -32,13 +33,18 @@ def generate_top_sign(params, secret, method_full_name):
     """
     מחשבת חתימת HMAC-SHA256 על פי פרוטוקול TOP API.
     
-    !!! תיקון קריטי: שרשור שם המתודה המלא בתחילת המחרוזת (כפי שנדרש במקרים מורכבים).
+    !!! תיקון קריטי: ניקוי ה-redirect_uri לפני שרשורו לחתימה.
     """
-    # 1. סינון פרמטרים לחתימה - מוציאים את ה-method מהמיון האלפביתי
+    # 1. סינון פרמטרים לחתימה - מוציאים את ה-method ואת הפרמטר הסודי
     params_to_sign = {
         k: v for k, v in params.items() 
         if k not in ['sign', 'client_secret', 'sign_method', 'method'] 
     }
+    
+    # 1a. תיקון ה-redirect_uri: מוציאים ממנו קידוד URL
+    # השרת מצפה לראות את ה-URL המקורי (Decoded) במחרוזת החתימה.
+    if 'redirect_uri' in params_to_sign:
+        params_to_sign['redirect_uri'] = unquote(params_to_sign['redirect_uri'])
     
     # 2. מיון הפרמטרים הנותרים (ללא method) לפי סדר אלפביתי
     sorted_params = sorted(params_to_sign.items())
@@ -101,7 +107,7 @@ def callback():
     # -----------------------------------------------------------------
 
     try:
-        # 1. יצירת פרמטרים לחתימה (משתמשים בשם המלא לצורך החתימה)
+        # 1. יצירת פרמטרים לחתימה 
         data_for_sign = {
             "app_key": CLIENT_ID, 
             "timestamp": str(int(time.time() * 1000)),
@@ -112,10 +118,10 @@ def callback():
             "code": code,
             "redirect_uri": REDIRECT_URI,
             "need_refresh_token": "true",
-            "method": API_METHOD_FULL_NAME # מתווסף לכאן רק כדי שפונקציית החתימה תדע את המתודה
+            # הפרמטר 'method' נשאר בחוץ, רק נשלח לפונקציית החתימה 
         }
         
-        # 2. חישוב החתימה (משרשר את המתודה המלאה בתחילה)
+        # 2. חישוב החתימה (משרשר את המתודה המלאה בתחילה ומנקה את ה-URI)
         calculated_sign, data_to_sign_raw = generate_top_sign(
             data_for_sign, 
             CLIENT_SECRET,
@@ -124,7 +130,7 @@ def callback():
 
         # 3. הכנת הנתונים לשליחה (משתמשים בנתיב הקצר)
         # מוציאים את ה-client_secret ומוסיפים את ה-sign ואת הנתיב הקצר
-        post_data = {k: v for k, v in data_for_sign.items() if k != 'client_secret' and k != 'method'}
+        post_data = {k: v for k, v in data_for_sign.items() if k != 'client_secret'}
         post_data["method"] = API_METHOD_PATH_NAME 
         post_data["sign"] = calculated_sign
         
@@ -165,7 +171,7 @@ def callback():
     log_html = f"""
     <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
         <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
-        <p><strong>שיטת חתימה:</strong> <code>TOP API HMAC-SHA256 (Prepend Method Strategy)</code></p>
+        <p><strong>שיטת חתימה:</strong> <code>TOP API HMAC-SHA256 (Redirect URI Decode Fix)</code></p>
         <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
         <p><strong>Method הנשלח (Path Name):</strong> <code>{API_METHOD_PATH_NAME}</code></p>
         <p><strong>Method לחתימה (Full Name):</strong> <code>{API_METHOD_FULL_NAME}</code></p>
@@ -173,7 +179,7 @@ def callback():
         <h5>JSON שנשלח (Form Data - ללא client_secret):</h5>
         <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(post_data, indent=2)}</pre>
 
-        <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign - Method Prepended):</h5>
+        <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign - URI Decoded):</h5>
         <pre style="background-color: #fce8e8; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
         
         <h5>החתימה שחושבה (Calculated SIGN):</h5>
