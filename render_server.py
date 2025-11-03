@@ -2,6 +2,7 @@ from flask import Flask, request
 import requests
 import os
 import hashlib
+import hmac
 import time
 import json 
 
@@ -18,36 +19,44 @@ AUTH_URL = (
     f"https://auth.aliexpress.com/oauth/authorize?"
     f"response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&state=1234"
 )
+# זו הכתובת הנכונה להחלפת טוקנים
 TOKEN_URL = "https://oauth.aliexpress.com/token" 
+# שם הפעולה הנדרשת בתוך הפרמטרים
 API_METHOD_PATH = "aliexpress.trade.auth.token.create"
 
-# --- פונקציה לחישוב חתימת API (Signature) באמצעות MD5 (TOP Protocol) ---
-def generate_md5_sign(params, secret):
+# --- פונקציה לחישוב חתימת API (Signature) באמצעות HMAC-SHA256 ---
+def generate_hmac_sha256_sign(params, secret, method_name):
     """
-    מחשבת חתימת MD5 בפורמט TOP (Taobao Open Platform).
-    הנוסחה: SIGN = MD5(SECRET + סדר הפרמטרים הממוינים והמשורשרים + SECRET)
-    הפרמטרים לחתימה אינם כוללים sign, client_secret או method.
+    מחשבת חתימת HMAC-SHA256 על פי הפרוטוקול המודרני של Alibaba.
+    הנוסחה: SIGN = HMAC-SHA256(SECRET, (Method Name + סדר הפרמטרים))
     """
-    # 1. סינון פרמטרים לחתימה (משאיר רק את הנתונים העיקריים)
+    # 1. סינון פרמטרים לחתימה
+    # אין לכלול את client_secret או sign במחרוזת לחתימה.
     params_to_sign = {
         k: v for k, v in params.items() 
-        if k not in ['sign', 'client_secret', 'method'] # הוצאת פרמטרים קריטיים שאינם חלק מהחתימה
+        if k not in ['sign', 'client_secret', 'method'] 
     }
     
     # 2. מיון הפרמטרים לפי סדר אלפביתי
+    # הופכים את כל הערכים למחרוזות (str) לפני שרשור
     sorted_params = sorted(params_to_sign.items())
     
-    # 3. שרשור הפרמטרים
+    # 3. שרשור הפרמטרים לפורמט 'keyvaluekeyvalue...'
     concatenated_string = ""
     for k, v in sorted_params:
-        # חובה להמיר ל-str ללא קשר לסוג הנתון המקורי
         concatenated_string += f"{k}{str(v)}"
+
+    # 4. יצירת המחרוזת לחתימה: Method Name + CONCATENATED_PARAMS
+    # זוהי השיטה הנפוצה ביותר ל-HMAC-SHA256 ב-TOP.
+    data_to_sign_raw = method_name + concatenated_string 
     
-    # 4. יצירת המחרוזת לחתימה: SECRET + CONCATENATED_PARAMS + SECRET
-    data_to_sign_raw = secret + concatenated_string + secret
-    
-    # 5. חישוב חתימת MD5
-    hashed = hashlib.md5(data_to_sign_raw.encode('utf-8'))
+    # 5. חישוב חתימת HMAC-SHA256
+    # המפתח הוא CLIENT_SECRET
+    hashed = hmac.new(
+        secret.encode('utf-8'),
+        data_to_sign_raw.encode('utf-8'),
+        hashlib.sha256
+    )
     
     # 6. המרת התוצאה להקסה (hex) ורישום באותיות גדולות (Uppercase)
     sign = hashed.hexdigest().upper()
@@ -93,8 +102,7 @@ def callback():
     }
     
     # 2. חישוב החתימה
-    # generate_md5_sign עכשיו מחשבת חתימה רק על הפרמטרים העיקריים, מתווסת על ידי הסוד.
-    calculated_sign, data_to_sign_raw = generate_md5_sign(token_params, CLIENT_SECRET)
+    calculated_sign, data_to_sign_raw = generate_hmac_sha256_sign(token_params, CLIENT_SECRET, API_METHOD_PATH)
     token_params["sign"] = calculated_sign
     
     # 3. ביצוע בקשת ה-POST
@@ -127,7 +135,7 @@ def callback():
             <h5>JSON שנשלח (Form Data):</h5>
             <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(token_params, indent=2)}</pre>
 
-            <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign - כולל הסוד):</h5>
+            <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign):</h5>
             <pre style="background-color: #fce8e8; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
             
             <h5>החתימה שחושבה (Calculated SIGN):</h5>
