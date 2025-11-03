@@ -27,11 +27,11 @@ API_METHOD_PATH = "aliexpress.trade.auth.token.create"
 # --- פונקציה לחישוב חתימת API (Signature) באמצעות HMAC-SHA256 ---
 def generate_hmac_sha256_sign(params, secret, method_name):
     """
-    מחשבת חתימת HMAC-SHA256 על פי הפרוטוקול המודרני של Alibaba.
-    הנוסחה: SIGN = HMAC-SHA256(SECRET, (Method Name + סדר הפרמטרים))
+    מחשבת חתימת HMAC-SHA256 על פי הפרוטוקול המודרני של Alibaba (TOP).
+    הנוסחה הנכונה: SIGN = HMAC-SHA256(SECRET, (SECRET + Method Name + פרמטרים ממוינים + SECRET))
     """
     # 1. סינון פרמטרים לחתימה
-    # אין לכלול את client_secret או sign במחרוזת לחתימה.
+    # אין לכלול את sign או client_secret במחרוזת לחתימה.
     params_to_sign = {
         k: v for k, v in params.items() 
         if k not in ['sign', 'client_secret'] 
@@ -46,12 +46,12 @@ def generate_hmac_sha256_sign(params, secret, method_name):
     for k, v in sorted_params:
         concatenated_string += f"{k}{str(v)}"
 
-    # 4. יצירת המחרוזת לחתימה: Method Name + CONCATENATED_PARAMS
-    # זוהי השיטה הנפוצה ביותר ל-HMAC-SHA256 ב-TOP.
-    data_to_sign_raw = method_name + concatenated_string 
+    # 4. יצירת המחרוזת לחתימה: SECRET + Method Name + CONCATENATED_PARAMS + SECRET
+    # זהו הכלל הספציפי ששבר אותנו עד עכשיו.
+    data_to_sign_raw = secret + method_name + concatenated_string + secret
     
     # 5. חישוב חתימת HMAC-SHA256
-    # המפתח הוא CLIENT_SECRET
+    # שימו לב: המפתח ל-HMAC הוא עדיין רק ה-SECRET, אבל ה-SECRET נכלל גם ב-data_to_sign_raw.
     hashed = hmac.new(
         secret.encode('utf-8'),
         data_to_sign_raw.encode('utf-8'),
@@ -102,6 +102,7 @@ def callback():
     }
     
     # 2. חישוב החתימה
+    # ה-SECRET נכלל עכשיו במחרוזת החתימה (data_to_sign_raw)
     calculated_sign, data_to_sign_raw = generate_hmac_sha256_sign(token_params, CLIENT_SECRET, API_METHOD_PATH)
     token_params["sign"] = calculated_sign
     
