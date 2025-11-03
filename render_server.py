@@ -2,14 +2,13 @@ from flask import Flask, request
 import requests
 import os
 import hashlib
-import hmac
 import time
 import json 
 
 app = Flask(__name__)
 
 # ===== הגדרות שצריך למלא =====
-# הערכים האלה נבדקו ואומתו כנכונים על ידך
+# הערכים האלה אומתו ונמצאו תקינים
 CLIENT_ID = "520232"  
 CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"  
 REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"
@@ -22,37 +21,35 @@ AUTH_URL = (
 TOKEN_URL = "https://oauth.aliexpress.com/token" 
 API_METHOD_PATH = "aliexpress.trade.auth.token.create"
 
-# --- פונקציה לחישוב חתימת API (Signature) באמצעות MD5 ---
-def generate_md5_sign(params, secret, method_name):
+# --- פונקציה לחישוב חתימת API (Signature) באמצעות MD5 (TOP Protocol) ---
+def generate_md5_sign(params, secret):
     """
-    מחשבת חתימת MD5 בפורמט TOP.
-    הנוסחה: SIGN = MD5(SECRET + סדר הפרמטרים + SECRET)
+    מחשבת חתימת MD5 בפורמט TOP (Taobao Open Platform).
+    הנוסחה: SIGN = MD5(SECRET + סדר הפרמטרים הממוינים והמשורשרים + SECRET)
+    הפרמטרים לחתימה אינם כוללים sign, client_secret או method.
     """
-    # 1. מיון הפרמטרים לפי סדר אלפביתי (ללא 'sign' ו-'client_secret')
-    # למרות ש-client_secret נשלח בנתונים, הוא לא נכנס למחרוזת החתימה
-    params_for_sign = {
+    # 1. סינון פרמטרים לחתימה (משאיר רק את הנתונים העיקריים)
+    params_to_sign = {
         k: v for k, v in params.items() 
-        if k != 'sign' and k != 'client_secret'
+        if k not in ['sign', 'client_secret', 'method'] # הוצאת פרמטרים קריטיים שאינם חלק מהחתימה
     }
     
-    # הוספת פרמטרים ייחודיים ל-OAuth
-    params_for_sign['method'] = method_name
+    # 2. מיון הפרמטרים לפי סדר אלפביתי
+    sorted_params = sorted(params_to_sign.items())
     
-    # מיון
-    sorted_params = sorted(params_for_sign.items())
-    
-    # 2. שרשור הפרמטרים
+    # 3. שרשור הפרמטרים
     concatenated_string = ""
     for k, v in sorted_params:
+        # חובה להמיר ל-str ללא קשר לסוג הנתון המקורי
         concatenated_string += f"{k}{str(v)}"
     
-    # 3. יצירת המחרוזת לחתימה: SECRET + CONCATENATED_PARAMS + SECRET
+    # 4. יצירת המחרוזת לחתימה: SECRET + CONCATENATED_PARAMS + SECRET
     data_to_sign_raw = secret + concatenated_string + secret
     
-    # 4. חישוב חתימת MD5
+    # 5. חישוב חתימת MD5
     hashed = hashlib.md5(data_to_sign_raw.encode('utf-8'))
     
-    # 5. המרת התוצאה להקסה (hex) ורישום באותיות גדולות (Uppercase)
+    # 6. המרת התוצאה להקסה (hex) ורישום באותיות גדולות (Uppercase)
     sign = hashed.hexdigest().upper()
     return sign, data_to_sign_raw
 
@@ -92,13 +89,13 @@ def callback():
         "need_refresh_token": "true",
         "timestamp": int(time.time() * 1000), 
         "v": "2.0", 
+        "method": API_METHOD_PATH, # נשלח ב-Form Data
     }
     
     # 2. חישוב החתימה
-    # generate_md5_sign משתמשת ב-MD5 ובשיטת SECRET + DATA + SECRET.
-    calculated_sign, data_to_sign_raw = generate_md5_sign(token_params, CLIENT_SECRET, API_METHOD_PATH)
+    # generate_md5_sign עכשיו מחשבת חתימה רק על הפרמטרים העיקריים, מתווסת על ידי הסוד.
+    calculated_sign, data_to_sign_raw = generate_md5_sign(token_params, CLIENT_SECRET)
     token_params["sign"] = calculated_sign
-    token_params["method"] = API_METHOD_PATH
     
     # 3. ביצוע בקשת ה-POST
     response = None
@@ -108,21 +105,30 @@ def callback():
         tokens = response.json()
         
     except Exception as e:
-        error_message = f"❌ שגיאה בשליפת טוקנים: {e}"
+        # בדיקה אם יש תגובה (גם אם הסטטוס קוד הוא 4xx או 5xx)
         response_text = response.text if response is not None else "אין תגובה מהשרת."
+        
+        # ניסיון לפרסר את השגיאה אם היא JSON
+        try:
+            error_json = json.loads(response_text)
+            error_msg = error_json.get('error_msg', str(e))
+        except json.JSONDecodeError:
+            error_msg = str(e)
+            
+        error_message_display = f"❌ שגיאה בשליפת טוקנים: {error_msg}"
         
         # --- הצגת לוגים מפורטים בדפדפן ---
         log_html = f"""
         <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
             <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
-            <p style="text-align: center;"><strong>שגיאה שהתקבלה:</strong> <code>{e}</code></p>
+            <p style="text-align: center;"><strong>שגיאה שהתקבלה:</strong> <code>{error_msg}</code></p>
             <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
             
             <h5>JSON שנשלח (Form Data):</h5>
             <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(token_params, indent=2)}</pre>
 
-            <h5>מחרוזת גולמית לחתימה (Data to Sign - כולל הסוד):</h5>
-            <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
+            <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign - כולל הסוד):</h5>
+            <pre style="background-color: #fce8e8; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
             
             <h5>החתימה שחושבה (Calculated SIGN):</h5>
             <code style="display: block; background-color: #e0e0ff; padding: 5px; border-radius: 3px; font-weight: bold; word-break: break-all;">{calculated_sign}</code>
@@ -134,7 +140,7 @@ def callback():
         
         return f"""
         <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff0f0; border: 1px solid #ffdddd; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
-            <h3 style="color: #d9534f;">{error_message}</h3>
+            <h3 style="color: #d9534f;">{error_message_display}</h3>
             {log_html}
         </div>
         """
