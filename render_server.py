@@ -2,7 +2,6 @@ from flask import Flask, request
 import requests
 import os
 import hashlib
-import hmac
 import time
 import json 
 
@@ -21,18 +20,14 @@ AUTH_URL = (
 )
 # זו הכתובת הנכונה להחלפת טוקנים
 TOKEN_URL = "https://oauth.aliexpress.com/token" 
-# נשמר כדי להשתמש בו בחתימה אם נצטרך, אך לא נשלח בבקשת ה-OAuth
-API_METHOD_PATH = "aliexpress.trade.auth.token.create" 
 
-# --- פונקציה לחישוב חתימת API (Signature) באמצעות HMAC-SHA256 ---
-def generate_hmac_sha256_sign(params, secret):
+# --- פונקציה לחישוב חתימת API (Signature) באמצעות MD5 ---
+def generate_md5_sign(params, secret):
     """
-    מחשבת חתימת HMAC-SHA256 על פי הפרוטוקול של AliExpress OAuth.
-    הנוסחה ככל הנראה היא HMAC-SHA256(SECRET, (SECRET + פרמטרים ממוינים + SECRET)),
-    אך ללא METHOD, V, ו-TIMESTAMP.
+    מחשבת חתימת MD5 על פי הפרוטוקול הקלאסי של Alibaba (TOP).
+    נוסחה: SIGN = MD5(SECRET + פרמטרים ממוינים + SECRET)
     """
-    # 1. סינון פרמטרים לחתימה
-    # אין לכלול את sign או client_secret במחרוזת לחתימה.
+    # 1. סינון פרמטרים לחתימה (רק הבסיסיים)
     params_to_sign = {
         k: v for k, v in params.items() 
         if k not in ['sign', 'client_secret'] 
@@ -49,12 +44,8 @@ def generate_hmac_sha256_sign(params, secret):
     # 4. יצירת המחרוזת לחתימה: SECRET + CONCATENATED_PARAMS + SECRET
     data_to_sign_raw = secret + concatenated_string + secret
     
-    # 5. חישוב חתימת HMAC-SHA256
-    hashed = hmac.new(
-        secret.encode('utf-8'),
-        data_to_sign_raw.encode('utf-8'),
-        hashlib.sha256
-    )
+    # 5. חישוב חתימת MD5
+    hashed = hashlib.md5(data_to_sign_raw.encode('utf-8'))
     
     # 6. המרת התוצאה להקסה (hex) ורישום באותיות גדולות (Uppercase)
     sign = hashed.hexdigest().upper()
@@ -79,7 +70,7 @@ def index():
 def callback():
     code = request.args.get('code')
     
-    # 1. הכנת הפרמטרים הנדרשים (הפעם רק פרמטרי OAuth בסיסיים)
+    # 1. הכנת הפרמטרים הנדרשים (רק פרמטרי OAuth בסיסיים)
     token_params = {
         "grant_type": "authorization_code",
         "client_id": CLIENT_ID,
@@ -89,9 +80,7 @@ def callback():
         "need_refresh_token": "true",
     }
 
-    # 2. אם חסר קוד, מציגים שגיאה פשוטה ויוצאים
     if not code:
-        # למרות שזה לא המקרה שלך, משאירים את הבדיקה
         return f"""
         <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff0f0; border: 1px solid #ffdddd; border-radius: 10px;">
             <h3 style="color: #d9534f;">❌ שגיאה: לא התקבל קוד אימות</h3>
@@ -99,9 +88,8 @@ def callback():
         </div>
         """
 
-    # 3. חישוב החתימה (ללא Method, V, Timestamp)
-    # מעבירים רק את הפרמטרים הבסיסיים לחישוב החתימה
-    calculated_sign, data_to_sign_raw = generate_hmac_sha256_sign(token_params, CLIENT_SECRET)
+    # 3. חישוב החתימה (שימוש ב-MD5 הפשוטה)
+    calculated_sign, data_to_sign_raw = generate_md5_sign(token_params, CLIENT_SECRET)
     token_params["sign"] = calculated_sign
     
     # 4. ביצוע בקשת ה-POST
@@ -118,7 +106,7 @@ def callback():
         # אם יש שגיאה מפורשת בתוך ה-JSON, משתמשים בה
         if 'error_msg' in tokens:
             error_msg = tokens['error_msg']
-            raise Exception(error_msg) # מעבירים לבלוק ה-except
+            raise Exception(error_msg) 
         
         response.raise_for_status() 
         
@@ -129,6 +117,7 @@ def callback():
         log_html = f"""
         <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
             <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
+            <p><strong>שיטת חתימה:</strong> <code>MD5 (TOP CLASSIC)</code></p>
             <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
             
             <h5>JSON שנשלח (Form Data):</h5>
@@ -157,7 +146,6 @@ def callback():
     access_token = tokens.get("access_token")
     refresh_token = tokens.get("refresh_token")
 
-    # ... הצגת טוקנים בהצלחה (נותר זהה) ...
     if access_token and refresh_token:
         # הצגת הטוקנים
         return f"""
@@ -177,6 +165,7 @@ def callback():
         log_html = f"""
         <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
             <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
+            <p><strong>שיטת חתימה:</strong> <code>MD5 (TOP CLASSIC)</code></p>
             <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
             
             <h5>JSON שנשלח (Form Data):</h5>
