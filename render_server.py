@@ -21,14 +21,15 @@ AUTH_URL = (
 )
 # זו הכתובת הנכונה להחלפת טוקנים
 TOKEN_URL = "https://oauth.aliexpress.com/token" 
-# שם הפעולה הנדרשת בתוך הפרמטרים
-API_METHOD_PATH = "aliexpress.trade.auth.token.create"
+# נשמר כדי להשתמש בו בחתימה אם נצטרך, אך לא נשלח בבקשת ה-OAuth
+API_METHOD_PATH = "aliexpress.trade.auth.token.create" 
 
 # --- פונקציה לחישוב חתימת API (Signature) באמצעות HMAC-SHA256 ---
-def generate_hmac_sha256_sign(params, secret, method_name):
+def generate_hmac_sha256_sign(params, secret):
     """
-    מחשבת חתימת HMAC-SHA256 על פי הפרוטוקול המודרני של Alibaba (TOP).
-    הנוסחה הנכונה: SIGN = HMAC-SHA256(SECRET, (SECRET + Method Name + פרמטרים ממוינים + SECRET))
+    מחשבת חתימת HMAC-SHA256 על פי הפרוטוקול של AliExpress OAuth.
+    הנוסחה ככל הנראה היא HMAC-SHA256(SECRET, (SECRET + פרמטרים ממוינים + SECRET)),
+    אך ללא METHOD, V, ו-TIMESTAMP.
     """
     # 1. סינון פרמטרים לחתימה
     # אין לכלול את sign או client_secret במחרוזת לחתימה.
@@ -38,7 +39,6 @@ def generate_hmac_sha256_sign(params, secret, method_name):
     }
     
     # 2. מיון הפרמטרים לפי סדר אלפביתי
-    # הופכים את כל הערכים למחרוזות (str) לפני שרשור
     sorted_params = sorted(params_to_sign.items())
     
     # 3. שרשור הפרמטרים לפורמט 'keyvaluekeyvalue...'
@@ -46,11 +46,10 @@ def generate_hmac_sha256_sign(params, secret, method_name):
     for k, v in sorted_params:
         concatenated_string += f"{k}{str(v)}"
 
-    # 4. יצירת המחרוזת לחתימה: SECRET + Method Name + CONCATENATED_PARAMS + SECRET
-    data_to_sign_raw = secret + method_name + concatenated_string + secret
+    # 4. יצירת המחרוזת לחתימה: SECRET + CONCATENATED_PARAMS + SECRET
+    data_to_sign_raw = secret + concatenated_string + secret
     
     # 5. חישוב חתימת HMAC-SHA256
-    # המפתח ל-HMAC הוא ה-SECRET, אבל ה-SECRET נכלל גם ב-data_to_sign_raw.
     hashed = hmac.new(
         secret.encode('utf-8'),
         data_to_sign_raw.encode('utf-8'),
@@ -80,7 +79,7 @@ def index():
 def callback():
     code = request.args.get('code')
     
-    # 1. הכנת הפרמטרים הנדרשים (גם אם יש שגיאה, אנחנו צריכים את הנתונים לדיבוג)
+    # 1. הכנת הפרמטרים הנדרשים (הפעם רק פרמטרי OAuth בסיסיים)
     token_params = {
         "grant_type": "authorization_code",
         "client_id": CLIENT_ID,
@@ -88,13 +87,11 @@ def callback():
         "code": code if code else "NO_CODE_PROVIDED",
         "redirect_uri": REDIRECT_URI,
         "need_refresh_token": "true",
-        "timestamp": int(time.time() * 1000), 
-        "v": "2.0", 
-        "method": API_METHOD_PATH,
     }
 
     # 2. אם חסר קוד, מציגים שגיאה פשוטה ויוצאים
     if not code:
+        # למרות שזה לא המקרה שלך, משאירים את הבדיקה
         return f"""
         <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff0f0; border: 1px solid #ffdddd; border-radius: 10px;">
             <h3 style="color: #d9534f;">❌ שגיאה: לא התקבל קוד אימות</h3>
@@ -102,8 +99,9 @@ def callback():
         </div>
         """
 
-    # 3. חישוב החתימה
-    calculated_sign, data_to_sign_raw = generate_hmac_sha256_sign(token_params, CLIENT_SECRET, API_METHOD_PATH)
+    # 3. חישוב החתימה (ללא Method, V, Timestamp)
+    # מעבירים רק את הפרמטרים הבסיסיים לחישוב החתימה
+    calculated_sign, data_to_sign_raw = generate_hmac_sha256_sign(token_params, CLIENT_SECRET)
     token_params["sign"] = calculated_sign
     
     # 4. ביצוע בקשת ה-POST
@@ -159,6 +157,7 @@ def callback():
     access_token = tokens.get("access_token")
     refresh_token = tokens.get("refresh_token")
 
+    # ... הצגת טוקנים בהצלחה (נותר זהה) ...
     if access_token and refresh_token:
         # הצגת הטוקנים
         return f"""
