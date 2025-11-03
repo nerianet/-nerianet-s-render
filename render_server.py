@@ -21,34 +21,35 @@ AUTH_URL = (
 # כתובת ה-REST ל-TOP API:
 TOKEN_URL = "https://api-sg.aliexpress.com/rest" 
 
-# !!! הפיצול המכריע:
+# !!! הפיצול שנקבע:
 # 1. השם המלא - לחישוב החתימה (Method Full Name for Signature)
 API_METHOD_FULL_NAME = "aliexpress.trade.auth.token.create" 
 # 2. הנתיב הקצר - לשליחה ב-JSON (Method Path for Request Body)
 API_METHOD_PATH_NAME = "/auth/token/create"
 
 # --- פונקציה לחישוב חתימת API (Signature) באמצעות HMAC-SHA256 ---
-def generate_top_sign(params, secret):
+def generate_top_sign(params, secret, method_full_name):
     """
-    מחשבת חתימת HMAC-SHA256 על פי פרוטוקול TOP API של Alibaba.
+    מחשבת חתימת HMAC-SHA256 על פי פרוטוקול TOP API.
+    
+    !!! תיקון קריטי: שרשור שם המתודה המלא בתחילת המחרוזת (כפי שנדרש במקרים מורכבים).
     """
-    # 1. סינון פרמטרים לחתימה
-    # אנו משתמשים במתודה המלאה לצורך החתימה, אז אין צורך לסנן אותה.
+    # 1. סינון פרמטרים לחתימה - מוציאים את ה-method מהמיון האלפביתי
     params_to_sign = {
         k: v for k, v in params.items() 
-        if k not in ['sign', 'client_secret', 'sign_method'] 
+        if k not in ['sign', 'client_secret', 'sign_method', 'method'] 
     }
     
-    # 2. מיון הפרמטרים לפי סדר אלפביתי
+    # 2. מיון הפרמטרים הנותרים (ללא method) לפי סדר אלפביתי
     sorted_params = sorted(params_to_sign.items())
     
     # 3. שרשור הפרמטרים לפורמט 'keyvaluekeyvalue...'
-    concatenated_string = ""
+    concatenated_body = ""
     for k, v in sorted_params:
-        concatenated_string += f"{k}{str(v)}"
+        concatenated_body += f"{k}{str(v)}"
 
-    # 4. יצירת המחרוזת לחישוב (Method Full Name נמצא בתוכה, ממוין)
-    data_to_sign_raw = concatenated_string
+    # 4. יצירת המחרוזת לחישוב: משרשרים את המתודה המלאה בתחילה
+    data_to_sign_raw = method_full_name + concatenated_body
     
     # 5. חישוב חתימת HMAC-SHA256
     hashed = hmac.new(
@@ -90,6 +91,7 @@ def callback():
 
     # --- אתחול משתנים ---
     data_for_sign = {}
+    post_data = {}
     data_to_sign_raw = ""
     calculated_sign = "N/A"
     response_text = "אין תגובה מהשרת."
@@ -99,10 +101,9 @@ def callback():
     # -----------------------------------------------------------------
 
     try:
-        # 1. יצירת פרמטרים לחתימה (משתמשים בשם המלא)
+        # 1. יצירת פרמטרים לחתימה (משתמשים בשם המלא לצורך החתימה)
         data_for_sign = {
             "app_key": CLIENT_ID, 
-            "method": API_METHOD_FULL_NAME, # !!! לשימוש בחתימה בלבד !!!
             "timestamp": str(int(time.time() * 1000)),
             "v": "2.0",
             "sign_method": "HMAC_SHA256",
@@ -111,17 +112,20 @@ def callback():
             "code": code,
             "redirect_uri": REDIRECT_URI,
             "need_refresh_token": "true",
+            "method": API_METHOD_FULL_NAME # מתווסף לכאן רק כדי שפונקציית החתימה תדע את המתודה
         }
         
-        # 2. חישוב החתימה (על השם המלא)
+        # 2. חישוב החתימה (משרשר את המתודה המלאה בתחילה)
         calculated_sign, data_to_sign_raw = generate_top_sign(
             data_for_sign, 
-            CLIENT_SECRET
+            CLIENT_SECRET,
+            API_METHOD_FULL_NAME # העברת המתודה במפורש
         )
 
         # 3. הכנת הנתונים לשליחה (משתמשים בנתיב הקצר)
+        # מוציאים את ה-client_secret ומוסיפים את ה-sign ואת הנתיב הקצר
         post_data = {k: v for k, v in data_for_sign.items() if k != 'client_secret' and k != 'method'}
-        post_data["method"] = API_METHOD_PATH_NAME # !!! לשימוש בגוף הבקשה בלבד !!!
+        post_data["method"] = API_METHOD_PATH_NAME 
         post_data["sign"] = calculated_sign
         
         # 4. ביצוע בקשת ה-POST
@@ -161,7 +165,7 @@ def callback():
     log_html = f"""
     <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
         <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
-        <p><strong>שיטת חתימה:</strong> <code>TOP API HMAC-SHA256 (Split Method Strategy)</code></p>
+        <p><strong>שיטת חתימה:</strong> <code>TOP API HMAC-SHA256 (Prepend Method Strategy)</code></p>
         <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
         <p><strong>Method הנשלח (Path Name):</strong> <code>{API_METHOD_PATH_NAME}</code></p>
         <p><strong>Method לחתימה (Full Name):</strong> <code>{API_METHOD_FULL_NAME}</code></p>
@@ -169,7 +173,7 @@ def callback():
         <h5>JSON שנשלח (Form Data - ללא client_secret):</h5>
         <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(post_data, indent=2)}</pre>
 
-        <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign - כולל Method Full Name):</h5>
+        <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign - Method Prepended):</h5>
         <pre style="background-color: #fce8e8; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
         
         <h5>החתימה שחושבה (Calculated SIGN):</h5>
