@@ -10,7 +10,7 @@ app = Flask(__name__)
 
 # ===== הגדרות שצריך למלא =====
 CLIENT_ID = "520232"  # App Key שלך
-CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJZ"  # App Secret שלך (שונה לצורך בטיחות, ודא שהוא נכון בקוד שלך)
+CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"  # App Secret שלך (שונה לצורך בטיחות, ודא שהוא נכון בקוד שלך)
 REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"
 
 # הגדרת כתובות ה-API
@@ -152,3 +152,4 @@ def callback():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
