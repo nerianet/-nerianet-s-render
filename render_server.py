@@ -5,6 +5,8 @@ import os
 app = Flask(__name__)
 
 # ===== הגדרות שצריך למלא =====
+# **הערה: רצוי לשלוף את הנתונים הרגישים (כמו ה-SECRET) ממשתני סביבה ב-Render,
+# ולא לקודד אותם ישירות בקוד המקור.**
 CLIENT_ID = "520232"  # App Key שלך
 CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"  # App Secret שלך
 REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"
@@ -18,19 +20,31 @@ AUTH_URL = (
 @app.route('/')
 def index():
     return f'''
-    <h2>💡 התחברות ל-AliExpress API</h2>
-    <p>לחץ על הקישור למטה כדי להתחבר ולקבל את ה-access_token וה-refresh_token:</p>
-    <a href="{AUTH_URL}" target="_blank"><b>התחבר עכשיו ל-AliExpress</b></a>
+    <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f7f7f7; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+        <h2 style="color: #FF6600;">💡 התחברות ל-AliExpress API</h2>
+        <p style="color: #333; font-size: 1.1em;">לחץ על הקישור למטה כדי להתחבר ולבצע את האימות ב-AliExpress:</p>
+        <a href="{AUTH_URL}" target="_blank" style="display: inline-block; padding: 12px 25px; margin-top: 15px; background-color: #FF6600; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 1.2em; transition: background-color 0.3s;">
+            <b>התחבר עכשיו ל-AliExpress</b>
+        </a>
+        <p style="margin-top: 20px; font-size: 0.9em; color: #666;">לאחר האישור, המערכת תפנה אותך אוטומטית ל-Callback.</p>
+    </div>
     '''
 
 @app.route('/callback')
 def callback():
     code = request.args.get('code')
     if not code:
-        return "❌ לא התקבל קוד אימות (missing ?code=)"
+        return """
+        <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff0f0; border: 1px solid #ffdddd; border-radius: 10px;">
+            <h3 style="color: #d9534f;">❌ שגיאה: לא התקבל קוד אימות</h3>
+            <p>חסר פרמטר <code>?code=</code> בכתובת.</p>
+        </div>
+        """
 
     # === שלב 2 – בקשת טוקנים (POST) ===
-    token_url = "https://api-sg.aliexpress.com/oauth/token"
+    # התיקון בוצע כאן: שימוש בכתובת OAuth הנכונה להחלפת קוד.
+    token_url = "https://oauth.aliexpress.com/token" 
+    
     data = {
         "grant_type": "authorization_code",
         "client_id": CLIENT_ID,
@@ -40,15 +54,22 @@ def callback():
         "need_refresh_token": "true"
     }
 
+    response = None
     try:
+        # שליחת הבקשה להחלפת קוד האימות לטוקנים
         response = requests.post(token_url, data=data)
-        response.raise_for_status()
+        response.raise_for_status() # מפעיל Exception אם הסטטוס הוא 4xx או 5xx
         tokens = response.json()
     except Exception as e:
+        error_message = f"❌ שגיאה בשליפת טוקנים: {e}"
+        response_text = response.text if response is not None else "אין תגובה מהשרת."
+        
         return f"""
-        ❌ שגיאה בשליפת טוקנים: {e}
-        <br><br>
-        <pre>{response.text if 'response' in locals() else ''}</pre>
+        <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff0f0; border: 1px solid #ffdddd; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+            <h3 style="color: #d9534f;">{error_message}</h3>
+            <p style="color: #333;">תוכן התגובה הגולמי (לבדיקה):</p>
+            <pre style="text-align: left; background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto;">{response_text}</pre>
+        </div>
         """
 
     print("========== TOKENS ==========")
@@ -59,16 +80,30 @@ def callback():
     refresh_token = tokens.get("refresh_token")
 
     if access_token and refresh_token:
+        # הצגת הטוקנים באופן ברור ועיצוב יפה
         return f"""
-        <h3>✅ קיבלת בהצלחה את הטוקנים!</h3>
-        <p><b>Access Token:</b> {access_token}</p>
-        <p><b>Refresh Token:</b> {refresh_token}</p>
-        <p>העתק את הערכים האלו לקובץ tokens.json במחשב שלך.</p>
-        <hr>
-        <p>בדוק גם בלוגים של Render — שם תראה את ההדפסה המלאה של התגובה.</p>
+        <div style="font-family: Arial, sans-serif; text-align: center; padding: 30px; background-color: #e6ffe6; border: 1px solid #ccffcc; border-radius: 15px; box-shadow: 0 6px 12px rgba(40,167,69,0.2);">
+            <h3 style="color: #28a745; font-size: 1.5em;">✅ קיבלת בהצלחה את הטוקנים!</h3>
+            <p style="margin-top: 20px; text-align: left; padding: 0 10%; font-size: 1.1em;">
+                <b style="color: #007bff;">Access Token:</b> <code style="display: block; background-color: #fff; padding: 8px; border-radius: 4px; border: 1px solid #ccc; word-break: break-all;">{access_token}</code>
+            </p>
+            <p style="margin-top: 10px; text-align: left; padding: 0 10%; font-size: 1.1em;">
+                <b style="color: #17a2b8;">Refresh Token:</b> <code style="display: block; background-color: #fff; padding: 8px; border-radius: 4px; border: 1px solid #ccc; word-break: break-all;">{refresh_token}</code>
+            </p>
+            <p style="margin-top: 25px; font-weight: bold; color: #333;">העתק את הערכים האלו לשימוש בקוד הפייתון הראשי שלך!</p>
+            <hr style="margin-top: 20px; border-color: #ccc;">
+            <p style="font-size: 0.9em; color: #666;">בדוק גם בלוגים של Render – שם תראה את ההדפסה המלאה של התגובה (למקרה שתצטרך אותה).</p>
+        </div>
         """
     else:
-        return f"<h3>⚠️ לא נמצאו טוקנים בתגובה</h3><pre>{tokens}</pre>"
+        # טיפול במקרה של תגובה מוצלחת (סטטוס 200) אך ללא טוקנים ב-JSON
+        return f"""
+        <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff8e1; border: 1px solid #ffe0b2; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+            <h3 style="color: #ff9800;">⚠️ לא נמצאו טוקנים בתגובה</h3>
+            <p style="color: #333;">תוכן התגובה המלאה (JSON):</p>
+            <pre style="text-align: left; background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto;">{tokens}</pre>
+        </div>
+        """
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
