@@ -9,9 +9,8 @@ from urllib.parse import urlencode
 app = Flask(__name__)
 
 # ===== הגדרות שצריך למלא =====
-# **הערה: רצוי לשלוף את הנתונים הרגישים (כמו ה-SECRET) ממשתני סביבה ב-Render.**
 CLIENT_ID = "520232"  # App Key שלך
-CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"  # App Secret שלך
+CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJZ"  # App Secret שלך (שונה לצורך בטיחות, ודא שהוא נכון בקוד שלך)
 REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"
 
 # הגדרת כתובות ה-API
@@ -19,42 +18,47 @@ AUTH_URL = (
     f"https://auth.aliexpress.com/oauth/authorize?"
     f"response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&state=1234"
 )
-TOKEN_URL = "https://oauth.aliexpress.com/token" # הכתובת הנכונה להחלפת קוד
+# הכתובת הנכונה להחלפת קוד (כפי שאומתה בתיקון הראשון)
+TOKEN_URL = "https://oauth.aliexpress.com/token" 
+# הנתיב שיש להוסיף לחתימה עבור הפעולה הזו
+API_METHOD_PATH = "aliexpress.trade.auth.token.create"
 
 # --- פונקציה לחישוב חתימת API (Signature) ---
-# **תיקון: מוסיפים את ה-SECRET כ-prefix ו-suffix למחרוזת הפרמטרים לפני הקידוד!**
-def generate_sign(params, secret, api_url_path="/token"):
+def generate_sign(params, secret, method_name):
     """
     מחשבת חתימת HMAC-SHA256 ל-AliExpress API.
-    הנוסחה: SIGN = HMAC_SHA256(URL_PATH + סדר הפרמטרים, SECRET)
+    הנוסחה: SIGN = HMAC_SHA256(API_METHOD_NAME + סדר הפרמטרים, SECRET)
     """
-    # 1. מיון הפרמטרים לפי סדר אלפביתי (ללא 'sign' אם קיים)
-    # יש לוודא ש-client_secret לא נכלל במיון הזה
-    params_for_sign = {k: v for k, v in params.items() if k != 'client_secret'}
+    # 1. מיון הפרמטרים לפי סדר אלפביתי (ללא 'sign' או 'client_secret')
+    # יש לוודא שכל המפתחות קטנים (lowercase) אם הם לא כאלה במקור, אבל כאן הם כבר תקינים.
+    params_for_sign = {k: v for k, v in params.items() if k != 'sign' and k != 'client_secret'}
     sorted_params = sorted(params_for_sign.items())
     
     # 2. שרשור הפרמטרים
     # הפורמט: key1value1key2value2...
     concatenated_string = ""
     for k, v in sorted_params:
-        # ודא שכל הערכים מוכנסים כמחרוזות
         concatenated_string += f"{k}{str(v)}"
     
-    # 3. הוספת ה-CLIENT_SECRET לפני ואחרי המחרוזת המאוחדת (בשיטת TOP)
-    data_to_sign = secret + api_url_path + concatenated_string + secret
+    # 3. יצירת המחרוזת לחתימה: METHOD_NAME + CONCATENATED_PARAMS
+    # לפי התיעוד של AliExpress, ה-Secret הוא המפתח ל-HMAC.
+    data_to_sign = method_name + concatenated_string
     
-    # 4. חישוב חתימת MD5 (למרות שהדרישה נראית SHA256, ה-SDK שלהם משתמש ב-MD5/SHA1 לעיתים)
-    # ננסה MD5 כיוון שה-HMAC-SHA256 לא עבד כראוי לפי התיעוד הקלאסי
-    # עבור ה-AliExpress, החתימה היא MD5 על המחרוזת המחוברת (TOP Signature).
+    # 4. חישוב חתימת HMAC-SHA256
+    hashed = hmac.new(
+        secret.encode('utf-8'),
+        data_to_sign.encode('utf-8'),
+        hashlib.sha256
+    )
     
-    sign_result = hashlib.md5(data_to_sign.encode('utf-8')).hexdigest().upper()
-    return sign_result
+    # 5. המרת התוצאה להקסה (hex) ורישום באותיות גדולות (Uppercase)
+    sign = hashed.hexdigest().upper()
+    return sign
 
 # --- Flask Routes ---
 
 @app.route('/')
 def index():
-    # ... (הקוד של הפונקציה index נשאר זהה) ...
     return f'''
     <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f7f7f7; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
         <h2 style="color: #FF6600;">💡 התחברות ל-AliExpress API</h2>
@@ -77,23 +81,21 @@ def callback():
         </div>
         """
 
-    # 1. הכנת הפרמטרים הנדרשים (כולל Timestamp)
-    # שימו לב: ה-client_secret אינו נשלח כפרמטר API רגיל, אך הכנסתי אותו ל-data כדי ש-requests ישלח אותו
-    # כאן אנחנו נשלח אותו כפרמטר, כיוון שיש צורך בו בבקשה
+    # 1. הכנת הפרמטרים הנדרשים (ללא client_secret בגלל שהוא מפתח החתימה)
+    # שימו לב: הוספת method ו-v (גרסה)
     token_params = {
         "grant_type": "authorization_code",
         "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET, # החזרנו את ה-client_secret לנתונים הנשלחים
         "code": code,
         "redirect_uri": REDIRECT_URI,
         "need_refresh_token": "true",
-        "timestamp": int(time.time() * 1000) # זמן נוכחי במילישניות
+        "timestamp": int(time.time() * 1000), # זמן נוכחי במילישניות
+        "method": API_METHOD_PATH, # שם הפעולה הנדרשת
+        "v": "2.0", # גרסת ה-API
     }
     
-    # 2. חישוב החתימה - נשלח את כל הפרמטרים הנשלחים לבקשה
-    # נתיב ה-API הוא בדרך כלל /auth/token/create
-    # אבל מכיוון שאנחנו משתמשים ב-OAuth, ננסה קודם את ה-SignATURE הכללי של Alibaba TOP
-    token_params["sign"] = generate_sign(token_params, CLIENT_SECRET, api_url_path='') # נתיב ריק
+    # 2. חישוב החתימה
+    token_params["sign"] = generate_sign(token_params, CLIENT_SECRET, API_METHOD_PATH)
     
     # 3. ביצוע בקשת ה-POST
     response = None
