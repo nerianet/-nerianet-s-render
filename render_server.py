@@ -1,137 +1,81 @@
-from flask import Flask, request
+from flask import Flask, request, redirect
 import requests
 import os
 import hashlib
 import hmac
 import time
 import json
+import logging
+
 
 app = Flask(__name__)
 
-# ===== הגדרות שצריך למלא =====
-CLIENT_ID = "520232"
-CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"
-REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"
 
-# כתובת ה-REST הבסיסית
-API_BASE = "https://api-sg.aliexpress.com"
-API_METHOD_PATH_NAME = "/auth/token/create"   # הנתיב הקצר שישורשר לחתימה ונקרא ישירות
-TOKEN_URL = API_BASE + "/rest" + API_METHOD_PATH_NAME
+# Configure logging to STDOUT so Render shows it
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s %(message)s')
+logger = logging.getLogger(__name__)
 
-def generate_top_sign(params, secret, endpoint_path):
-    """
-    חישוב HMAC-SHA256 לפי דפוס שהצליח בעבודות קהילתיות:
-    - ממיינים את הפרמטרים לפי שם המפתח (ASCII)
-    - בונים מחרוזת כמו key1value1key2value2...
-    - משרשרים את endpoint_path (למשל '/auth/token/create') בתחילת המחרוזת
-    - מחשבים HMAC-SHA256 עם client_secret כמפתח
-    - מחזירים hex upper-case
-    """
-    # 1. סינון פרמטרים שלא נחוצים לחתימה
-    params_to_sign = {
-        k: v for k, v in params.items()
-        if k not in ['sign', 'client_secret', 'sign_method', 'method']
-    }
 
-    # 2. מיון לפי ASCII (מפתח)
-    sorted_items = sorted(params_to_sign.items(), key=lambda x: x[0])
+# Load configuration from environment (preferred) with fallbacks (not recommended for prod)
+CLIENT_ID = os.environ.get('ALI_CLIENT_ID', '520232')
+CLIENT_SECRET = os.environ.get('ALI_CLIENT_SECRET', 'k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2')
+REDIRECT_URI = os.environ.get('REDIRECT_URI', 'https://nerianet-render-callback-ali.onrender.com/callback')
 
-    # 3. שרשור key+value ללא קידוד
-    concatenated = "".join(f"{k}{v}" for k, v in sorted_items)
 
-    # 4. prepend הנתיב הקצר
-    data_to_sign_raw = endpoint_path + concatenated
+API_BASE = 'https://api-sg.aliexpress.com'
+API_METHOD_PATH = '/auth/token/create'
+TOKEN_URL = f"{API_BASE}/rest{API_METHOD_PATH}"
 
-    # 5. חישוב HMAC-SHA256 (מפתח = client_secret)
-    mac = hmac.new(secret.encode('utf-8'), data_to_sign_raw.encode('utf-8'), hashlib.sha256)
-    sign = mac.hexdigest().upper()
-    return sign, data_to_sign_raw
+
+# Helper: compute sign exactly as required by TOP protocol variant used here
+def generate_top_sign(params: dict, secret: str):
+"""
+HMAC-SHA256 sign with pattern: client_secret + concat(sorted(key+value...)) + client_secret
+Returns (SIGN_upper_hex, raw_string_used_for_signing)
+"""
+# Exclude keys that should not be part of signature
+filtered = {k: v for k, v in params.items() if k not in ('sign', 'client_secret')}
+# Sort keys by ASCII (default Python sort does this)
+items = sorted(filtered.items(), key=lambda x: x[0])
+concatenated = ''.join(f"{k}{v}" for k, v in items)
+raw = f"{secret}{concatenated}{secret}"
+mac = hmac.new(secret.encode('utf-8'), raw.encode('utf-8'), hashlib.sha256)
+sign = mac.hexdigest().upper()
+return sign, raw
+
 
 @app.route('/')
 def index():
-    AUTH_URL = (
-        f"https://auth.aliexpress.com/oauth/authorize?"
-        f"response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&state=1234"
-    )
-    return f'''
-    <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">
-        <h2>התחבר ל-AliExpress</h2>
-        <a href="{AUTH_URL}" target="_blank">התחבר עכשיו</a>
-    </div>
-    '''
+# AliExpress OAuth authorize URL — user clicks it to approve
+auth_url = (
+f"https://auth.aliexpress.com/oauth/authorize?response_type=code"
+f"&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&state=render"
+)
+return f"""
+<div style='font-family: Arial, sans-serif; text-align: center; padding: 30px;'>
+<h2>AliExpress OAuth callback on Render</h2>
+<p>Click to authenticate and grant authorization to your AliExpress app.</p>
+<a href='{auth_url}' style='display:inline-block;padding:12px 20px;background:#FF6600;color:#fff;border-radius:8px;text-decoration:none;'>Authorize AliExpress</a>
+<p style='margin-top:20px;color:#666;font-size:0.9em;'>After approving, AliExpress will redirect back to <code>{REDIRECT_URI}</code>.</p>
+</div>
+"""
+
+
+@app.route('/healthz')
+def healthz():
+return 'OK', 200
+
 
 @app.route('/callback')
 def callback():
-    code = request.args.get('code')
-    if not code:
-        return "Missing code", 400
+code = request.args.get('code')
+error = request.args.get('error')
+if error:
+return f"Error from provider: {error}", 400
+if not code:
+return 'No authorization code found in query parameters.', 400
 
-    # הכנת פרמטרים
-    # שים לב: timestamp כאן יכול להיות בשיטת millisecond UNIX, זה עובד ברבות מהדוגמאות
-    timestamp = str(int(time.time() * 1000))
 
-    params_for_sign = {
-        "app_key": CLIENT_ID,
-        "timestamp": timestamp,
-        "sign_method": "HMAC_SHA256",   # שים לב: לפעמים השדה נקרא 'sha256' בדוגמאות — אם ידרוש שינוי, נשנה
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": REDIRECT_URI,
-        "need_refresh_token": "true",
-        # שים לב: אין 'method' כאן לחתימה
-    }
-
-    # חישוב החתימה — משתמש בנתיב הקצר (endpoint path)
-    calculated_sign, data_to_sign_raw = generate_top_sign(params_for_sign, CLIENT_SECRET, API_METHOD_PATH_NAME)
-
-    # בונים את ה-form data לשליחה (ללא client_secret)
-    post_data = params_for_sign.copy()
-    post_data["method"] = API_METHOD_PATH_NAME  # עדיין שולחים את הנתיב הקצר כפרמטר אם הפורמט דורש
-    post_data["sign"] = calculated_sign
-
-    # שולחים POST ל־https://api-sg.aliexpress.com/rest/auth/token/create
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
-    }
-
-    try:
-        response = requests.post(TOKEN_URL, data=post_data, headers=headers, timeout=15)
-        response_text = response.text
-        full_response = response.json()
-    except Exception as e:
-        return f"Request failed: {e}", 500
-
-    # בדיקות פשוטות על תגובה
-    if 'error_response' in full_response:
-        return f"API error: {json.dumps(full_response['error_response'], indent=2)}", 500
-
-    # ננסה למצוא access_token במפתחות הצפויים
-    tokens = {}
-    if 'access_token' in full_response:
-        tokens = full_response
-    else:
-        response_key = "aliexpress_trade_auth_token_create_response"
-        if response_key in full_response:
-            tokens = full_response[response_key]
-        else:
-            tokens = full_response
-
-    access_token = tokens.get("access_token")
-    refresh_token = tokens.get("refresh_token")
-
-    debug_html = f"""
-    <h3>DEBUG</h3>
-    <pre>POST URL: {TOKEN_URL}</pre>
-    <pre>Form data sent (no client_secret): {json.dumps(post_data, indent=2)}</pre>
-    <pre>Data used for sign (raw): {data_to_sign_raw}</pre>
-    <pre>Calculated sign: {calculated_sign}</pre>
-    <pre>API response: {response_text}</pre>
-    """
-
-    if access_token and refresh_token:
-        return f"<h2>Success</h2><p>access_token: {access_token}</p><p>refresh_token: {refresh_token}</p>"
-    else:
-        return f"<h2>Error retrieving tokens</h2>{debug_html}", 500
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+# Build params for token request
+timestamp = str(int(time.time() * 1000))
+app.run(host='0.0.0.0', port=port)
