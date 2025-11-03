@@ -4,7 +4,7 @@ import os
 import hashlib
 import hmac
 import time
-from urllib.parse import urlencode # ייבוא לצורך קידוד הפרמטרים
+from urllib.parse import urlencode 
 
 app = Flask(__name__)
 
@@ -22,41 +22,39 @@ AUTH_URL = (
 TOKEN_URL = "https://oauth.aliexpress.com/token" # הכתובת הנכונה להחלפת קוד
 
 # --- פונקציה לחישוב חתימת API (Signature) ---
-# AliExpress דורשת חתימה קריפטוגרפית לכל בקשה
+# **תיקון: מוסיפים את ה-SECRET כ-prefix ו-suffix למחרוזת הפרמטרים לפני הקידוד!**
 def generate_sign(params, secret, api_url_path="/token"):
     """
     מחשבת חתימת HMAC-SHA256 ל-AliExpress API.
     הנוסחה: SIGN = HMAC_SHA256(URL_PATH + סדר הפרמטרים, SECRET)
     """
     # 1. מיון הפרמטרים לפי סדר אלפביתי (ללא 'sign' אם קיים)
-    sorted_params = sorted(params.items())
+    # יש לוודא ש-client_secret לא נכלל במיון הזה
+    params_for_sign = {k: v for k, v in params.items() if k != 'client_secret'}
+    sorted_params = sorted(params_for_sign.items())
     
     # 2. שרשור הפרמטרים
     # הפורמט: key1value1key2value2...
     concatenated_string = ""
     for k, v in sorted_params:
-        # ודא שהערך הוא מחרוזת (בגלל ש-time.time() הוא מספר)
+        # ודא שכל הערכים מוכנסים כמחרוזות
         concatenated_string += f"{k}{str(v)}"
     
-    # 3. הוספת נתיב ה-URL בתחילת המחרוזת
-    # שימו לב: הנתיב הנדרש עבור /token הוא '/token'
-    data_to_sign = api_url_path + concatenated_string
+    # 3. הוספת ה-CLIENT_SECRET לפני ואחרי המחרוזת המאוחדת (בשיטת TOP)
+    data_to_sign = secret + api_url_path + concatenated_string + secret
     
-    # 4. חישוב חתימת HMAC-SHA256
-    hashed = hmac.new(
-        secret.encode('utf-8'),
-        data_to_sign.encode('utf-8'),
-        hashlib.sha256
-    )
+    # 4. חישוב חתימת MD5 (למרות שהדרישה נראית SHA256, ה-SDK שלהם משתמש ב-MD5/SHA1 לעיתים)
+    # ננסה MD5 כיוון שה-HMAC-SHA256 לא עבד כראוי לפי התיעוד הקלאסי
+    # עבור ה-AliExpress, החתימה היא MD5 על המחרוזת המחוברת (TOP Signature).
     
-    # 5. המרת התוצאה להקסה (hex) ורישום באותיות גדולות (Uppercase)
-    sign = hashed.hexdigest().upper()
-    return sign
+    sign_result = hashlib.md5(data_to_sign.encode('utf-8')).hexdigest().upper()
+    return sign_result
 
 # --- Flask Routes ---
 
 @app.route('/')
 def index():
+    # ... (הקוד של הפונקציה index נשאר זהה) ...
     return f'''
     <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f7f7f7; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
         <h2 style="color: #FF6600;">💡 התחברות ל-AliExpress API</h2>
@@ -80,26 +78,29 @@ def callback():
         """
 
     # 1. הכנת הפרמטרים הנדרשים (כולל Timestamp)
-    # שימו לב: ה-client_secret לא נכנס למשתנה הזה
+    # שימו לב: ה-client_secret אינו נשלח כפרמטר API רגיל, אך הכנסתי אותו ל-data כדי ש-requests ישלח אותו
+    # כאן אנחנו נשלח אותו כפרמטר, כיוון שיש צורך בו בבקשה
     token_params = {
         "grant_type": "authorization_code",
         "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET, # החזרנו את ה-client_secret לנתונים הנשלחים
         "code": code,
         "redirect_uri": REDIRECT_URI,
         "need_refresh_token": "true",
         "timestamp": int(time.time() * 1000) # זמן נוכחי במילישניות
     }
     
-    # 2. חישוב החתימה
-    # ה-client_secret נכנס לכאן
-    token_params["sign"] = generate_sign(token_params, CLIENT_SECRET, api_url_path='/token')
+    # 2. חישוב החתימה - נשלח את כל הפרמטרים הנשלחים לבקשה
+    # נתיב ה-API הוא בדרך כלל /auth/token/create
+    # אבל מכיוון שאנחנו משתמשים ב-OAuth, ננסה קודם את ה-SignATURE הכללי של Alibaba TOP
+    token_params["sign"] = generate_sign(token_params, CLIENT_SECRET, api_url_path='') # נתיב ריק
     
     # 3. ביצוע בקשת ה-POST
     response = None
     try:
         # requests.post עם data=token_params שולח את הנתונים כ-Form Data (x-www-form-urlencoded)
         response = requests.post(TOKEN_URL, data=token_params)
-        response.raise_for_status() # מפעיל Exception אם הסטטוס הוא 4xx או 5xx
+        response.raise_for_status() 
         tokens = response.json()
         
     except Exception as e:
