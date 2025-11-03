@@ -18,23 +18,27 @@ AUTH_URL = (
     f"https://auth.aliexpress.com/oauth/authorize?"
     f"response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&state=1234"
 )
-# !!! שינוי כתובת ה-URL לזו המופיעה בתיעוד ה-SDK / PHP:
+# כתובת ה-REST החדשה ל-TOP API:
 TOKEN_URL = "https://api-sg.aliexpress.com/rest" 
-API_METHOD_PATH = "/auth/token/create" # נשנה את הפרמטרים בהתאם ל-SDK
+API_METHOD_PATH = "aliexpress.trade.auth.token.create" # שם המתודה בפורמט TOP
 
 # --- פונקציה לחישוב חתימת API (Signature) באמצעות HMAC-SHA256 ---
-def generate_hmac_sha256_sign(params, secret):
+# כעת הפונקציה מחשבת חתימה על כל פרמטרי ה-SDK
+def generate_top_sign(params, secret):
     """
-    מחשבת חתימת HMAC-SHA256 על פי כללי AliExpress OAuth (HMAC-SHA256, ללא פרמטרים מיותרים, ללא secret במחרוזת).
+    מחשבת חתימת HMAC-SHA256 על פי פרוטוקול TOP API של Alibaba.
+    החתימה מחושבת על כל הפרמטרים הממוינים אלפביתית (ללא ה-secret),
+    כאשר ה-secret משמש כמפתח (Key) ל-HMAC.
     """
     # 1. סינון פרמטרים לחתימה
-    # אין לכלול את sign או client_secret במחרוזת לחתימה.
+    # אין לכלול את sign, sign_method, או client_secret במחרוזת לחתימה.
     params_to_sign = {
         k: v for k, v in params.items() 
-        if k not in ['sign', 'client_secret'] 
+        if k not in ['sign', 'client_secret', 'sign_method'] 
     }
     
     # 2. מיון הפרמטרים לפי סדר אלפביתי
+    # חשוב לוודא שכל המפתחות והערכים הם מחרוזות.
     sorted_params = sorted(params_to_sign.items())
     
     # 3. שרשור הפרמטרים לפורמט 'keyvaluekeyvalue...'
@@ -42,10 +46,10 @@ def generate_hmac_sha256_sign(params, secret):
     for k, v in sorted_params:
         concatenated_string += f"{k}{str(v)}"
 
-    # 4. יצירת המחרוזת לחתימה: רק הפרמטרים הממוינים (ללא secret)
+    # 4. יצירת המחרוזת לחישוב
     data_to_sign_raw = concatenated_string
     
-    # 5. חישוב חתימת HMAC-SHA256, כאשר ה-SECRET הוא ה-Key לחישוב
+    # 5. חישוב חתימת HMAC-SHA256
     hashed = hmac.new(
         secret.encode('utf-8'), # SECRET משמש כמפתח (Key)
         data_to_sign_raw.encode('utf-8'), # המחרוזת לחישוב
@@ -75,36 +79,6 @@ def index():
 def callback():
     code = request.args.get('code')
     
-    # 1. הכנת פרמטרי ה-POST ל-URL החדש (TOKEN_URL = https://api-sg.aliexpress.com/rest)
-    # שימו לב: התיעוד של ה-SDK משתמש בפרמטרים שונים (action במקום grant_type, ו-appkey במקום client_id)
-    # ננסה את הפרמטרים הסטנדרטיים של OAuth קודם כל, כיוון שה-SDK מחביא את פרטי החתימה.
-    
-    token_params_post = {
-        "grant_type": "authorization_code",
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "code": code if code else "NO_CODE_PROVIDED",
-        "redirect_uri": REDIRECT_URI,
-        "need_refresh_token": "true",
-    }
-    
-    # ננסה גם את פרמטרי ה-SDK אם הניסיון הראשון נכשל (נשתמש בהם כרגע כ-Form data)
-    sdk_params_post = {
-        "appkey": CLIENT_ID,
-        "code": code if code else "NO_CODE_PROVIDED",
-        "method": API_METHOD_PATH, # /auth/token/create
-        "timestamp": str(int(time.time() * 1000)),
-        "v": "2.0",
-        "sign_method": "HMAC_SHA256",
-        "partner_id": "top-sdk-java", # לא חובה, אבל מומלץ
-    }
-    
-    # 2. נשלב את הפרמטרים של OAuth ו-SDK כדי לכסות את כל האפשרויות.
-    # נסיר כפילויות ונשאיר רק את אלו הנדרשים לחתימה.
-    
-    # נשאר עם פרמטרי ה-OAuth כפי שצויין ע"י ה-AI שלהם, ונשלח אותם ל-URL החדש.
-    # זה הניסיון המחושב ביותר שלנו.
-    
     if not code:
         return f"""
         <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff0f0; border: 1px solid #ffdddd; border-radius: 10px;">
@@ -113,11 +87,32 @@ def callback():
         </div>
         """
 
-    # 3. חישוב החתימה (HMAC-SHA256 ללא secret במחרוזת)
-    # נשתמש בפרמטרים הבסיסיים של OAuth כפי שצויין ע"י ה-AI שלהם:
-    calculated_sign, data_to_sign_raw = generate_hmac_sha256_sign(token_params_post, CLIENT_SECRET)
+    # 1. הכנת פרמטרי ה-TOP API (כולל אלו שהיו חסרים)
+    token_params_post = {
+        # פרמטרי TOP חובה:
+        "app_key": CLIENT_ID, # שם חדש ל-CLIENT_ID
+        "method": API_METHOD_PATH, # aliexpress.trade.auth.token.create
+        "timestamp": str(int(time.time() * 1000)), # זמן יוניקס במילישניות
+        "v": "2.0",
+        "sign_method": "HMAC_SHA256",
+        
+        # פרמטרי ה-OAuth שנשלחים בגוף הבקשה (form data):
+        "grant_type": "authorization_code",
+        "client_secret": CLIENT_SECRET, # לא נכלל בחתימה, אבל נשלח ב-POST
+        "code": code,
+        "redirect_uri": REDIRECT_URI,
+        "need_refresh_token": "true",
+
+        # הערה: מכיוון שזה פורמט TOP API, כל הפרמטרים הלא-חתימתיים
+        # אמורים להישלח כ-JSON בתוך פרמטר 'paramter_list' או משהו דומה,
+        # אך ננסה לשלוח את כולם כ-Form Data קודם, כפי שהיה ב-OAuth.
+    }
     
-    # הוספת החתימה לפרמטרים הנשלחים ב-POST
+    # 2. חישוב החתימה (כולל כל פרמטרי ה-TOP)
+    # שימו לב: client_secret לא נכלל במחרוזת לחתימה!
+    calculated_sign, data_to_sign_raw = generate_top_sign(token_params_post, CLIENT_SECRET)
+    
+    # 3. הוספת החתימה לפרמטרים הנשלחים ב-POST
     token_params_post["sign"] = calculated_sign
     
     # 4. ביצוע בקשת ה-POST
@@ -127,14 +122,35 @@ def callback():
     error_msg = "שגיאה לא ידועה."
 
     try:
-        response = requests.post(TOKEN_URL, data=token_params_post) # שליחה ל-URL החדש
-        response_text = response.text
-        tokens = response.json()
+        # הפרמטרים שאנחנו שולחים ב-POST (ללא ה-client_secret, כפי שנדרש בחתימה)
+        post_data = {k: v for k, v in token_params_post.items() if k != 'client_secret'}
         
-        # אם יש שגיאה מפורשת בתוך ה-JSON, משתמשים בה
-        if 'error_msg' in tokens:
-            error_msg = tokens['error_msg']
-            raise Exception(error_msg) 
+        response = requests.post(TOKEN_URL, data=post_data) # שליחה ל-URL החדש
+        response_text = response.text
+        
+        # מכיוון שזה TOP API, התגובה עשויה להיות מקוננת:
+        try:
+            full_response = response.json()
+            if 'error_response' in full_response:
+                tokens = full_response['error_response']
+                error_msg = tokens.get('msg', 'Error in error_response')
+                raise Exception(error_msg)
+            
+            # אם יש תגובה מוצלחת, היא כנראה תהיה בשם המתודה:
+            response_key = API_METHOD_PATH.replace('.', '_') + '_response'
+            if response_key in full_response:
+                tokens = full_response[response_key]
+            else:
+                tokens = full_response # אם אין קינון
+                
+        except json.JSONDecodeError:
+            raise Exception("תגובה לא תקינה (לא JSON)")
+        
+        # בדיקה לפרטי הטוקן בתוך התגובה
+        if 'access_token' not in tokens:
+             # אם הגענו לכאן, זה עדיין שגיאה
+             error_msg = tokens.get('message', tokens.get('error_msg', 'Token not found in response structure'))
+             raise Exception(error_msg)
         
         response.raise_for_status() 
         
@@ -145,11 +161,12 @@ def callback():
         log_html = f"""
         <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
             <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
-            <p><strong>שיטת חתימה:</strong> <code>HMAC-SHA256 (Final, Final Attempt)</code></p>
-            <p><strong>URL של הבקשה (NEW):</strong> <code>{TOKEN_URL}</code></p>
+            <p><strong>שיטת חתימה:</strong> <code>TOP API HMAC-SHA256 (Final, Final, Final Attempt)</code></p>
+            <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
+            <p><strong>Method:</strong> <code>{API_METHOD_PATH}</code></p>
             
-            <h5>JSON שנשלח (Form Data):</h5>
-            <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(token_params_post, indent=2)}</pre>
+            <h5>JSON שנשלח (Form Data - ללא client_secret):</h5>
+            <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(post_data, indent=2)}</pre>
 
             <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign):</h5>
             <pre style="background-color: #fce8e8; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
@@ -178,26 +195,26 @@ def callback():
         # הצגת הטוקנים
         return f"""
         <div style="font-family: Arial, sans-serif; text-align: center; padding: 30px; background-color: #e6ffe6; border: 1px solid #ccffcc; border-radius: 15px; box-shadow: 0 6px 12px rgba(40,167,69,0.2);">
-            <h3 style="color: #28a745; font-size: 1.5em;">✅ קיבלת בהצלחה את הטוקנים!</h3>
+            <h3 style="color: #28a745; font-size: 1.5em;">🎉 הצלחה! הטוקנים התקבלו!</h3>
             <p style="margin-top: 20px; text-align: left; padding: 0 10%; font-size: 1.1em;">
                 <b style="color: #007bff;">Access Token:</b> <code style="display: block; background-color: #fff; padding: 8px; border-radius: 4px; border: 1px solid #ccc; word-break: break-all;">{access_token}</code>
             </p>
             <p style="margin-top: 10px; text-align: left; padding: 0 10%; font-size: 1.1em;">
                 <b style="color: #17a2b8;">Refresh Token:</b> <code style="display: block; background-color: #fff; padding: 8px; border-radius: 4px; border: 1px solid #ccc; word-break: break-all;">{refresh_token}</code>
             </p>
-            <p style="margin-top: 25px; font-weight: bold; color: #333;">העתק את הערכים האלו לשימוש בקוד הפייתון הראשי שלך!</p>
+            <p style="margin-top: 25px; font-weight: bold; color: #333;">מעולה נריה! זה עבד! עכשיו תוכל להשתמש בהם לבקשות API נוספות.</p>
         </div>
         """
     else:
-        # טיפול במקרה של תגובה מוצלחת (סטטוס 200) אך ללא טוקנים ב-JSON
+        # טיפול בשגיאה סופית
         log_html = f"""
         <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
             <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
-            <p><strong>שיטת חתימה:</strong> <code>HMAC-SHA256 (Final, Final Attempt)</code></p>
-            <p><strong>URL של הבקשה (NEW):</strong> <code>{TOKEN_URL}</code></p>
+            <p><strong>שיטת חתימה:</strong> <code>TOP API HMAC-SHA256 (Final, Final, Final Attempt)</code></p>
+            <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
             
-            <h5>JSON שנשלח (Form Data):</h5>
-            <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(token_params_post, indent=2)}</pre>
+            <h5>JSON שנשלח (Form Data - ללא client_secret):</h5>
+            <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(post_data, indent=2)}</pre>
 
             <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign):</h5>
             <pre style="background-color: #fce8e8; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
@@ -211,10 +228,8 @@ def callback():
         """
         
         return f"""
-        <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff8e1; border: 1px solid #ffe0b2; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
-            <h3 style="color: #ff9800;">⚠️ לא נמצאו טוקנים בתגובה</h3>
-            <p style="color: #333;">תוכן התגובה המלאה (JSON):</p>
-            <pre style="text-align: left; background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto;">{json.dumps(tokens, indent=2)}</pre>
+        <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff0f0; border: 1px solid #ffdddd; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+            <h3 style="color: #d9534f;">❌ שגיאה בשליפת טוקנים: {error_msg}</h3>
             {log_html}
         </div>
         """
