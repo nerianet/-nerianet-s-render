@@ -2,13 +2,13 @@ from flask import Flask, request
 import requests
 import os
 import hashlib
+import hmac
 import time
 import json 
 
 app = Flask(__name__)
 
 # ===== הגדרות שצריך למלא =====
-# הערכים האלה אומתו ונמצאו תקינים
 CLIENT_ID = "520232"  
 CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"  
 REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"
@@ -18,16 +18,16 @@ AUTH_URL = (
     f"https://auth.aliexpress.com/oauth/authorize?"
     f"response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&state=1234"
 )
-# זו הכתובת הנכונה להחלפת טוקנים
 TOKEN_URL = "https://oauth.aliexpress.com/token" 
+API_METHOD_PATH = "aliexpress.trade.auth.token.create" 
 
-# --- פונקציה לחישוב חתימת API (Signature) באמצעות MD5 ---
-def generate_md5_sign(params, secret):
+# --- פונקציה לחישוב חתימת API (Signature) באמצעות HMAC-SHA256 ---
+def generate_hmac_sha256_sign(params, secret):
     """
-    מחשבת חתימת MD5 על פי הפרוטוקול הקלאסי של Alibaba (TOP).
-    נוסחה: SIGN = MD5(SECRET + פרמטרים ממוינים + SECRET)
+    מחשבת חתימת HMAC-SHA256 על פי כללי AliExpress OAuth (HMAC-SHA256, ללא פרמטרים מיותרים, ללא secret במחרוזת).
     """
-    # 1. סינון פרמטרים לחתימה (רק הבסיסיים)
+    # 1. סינון פרמטרים לחתימה
+    # אין לכלול את sign או client_secret במחרוזת לחתימה.
     params_to_sign = {
         k: v for k, v in params.items() 
         if k not in ['sign', 'client_secret'] 
@@ -41,11 +41,15 @@ def generate_md5_sign(params, secret):
     for k, v in sorted_params:
         concatenated_string += f"{k}{str(v)}"
 
-    # 4. יצירת המחרוזת לחתימה: SECRET + CONCATENATED_PARAMS + SECRET
-    data_to_sign_raw = secret + concatenated_string + secret
+    # 4. יצירת המחרוזת לחתימה: רק הפרמטרים הממוינים (ללא secret)
+    data_to_sign_raw = concatenated_string
     
-    # 5. חישוב חתימת MD5
-    hashed = hashlib.md5(data_to_sign_raw.encode('utf-8'))
+    # 5. חישוב חתימת HMAC-SHA256, כאשר ה-SECRET הוא ה-Key לחישוב
+    hashed = hmac.new(
+        secret.encode('utf-8'), # SECRET משמש כמפתח (Key)
+        data_to_sign_raw.encode('utf-8'), # המחרוזת לחישוב
+        hashlib.sha256
+    )
     
     # 6. המרת התוצאה להקסה (hex) ורישום באותיות גדולות (Uppercase)
     sign = hashed.hexdigest().upper()
@@ -70,8 +74,8 @@ def index():
 def callback():
     code = request.args.get('code')
     
-    # 1. הכנת הפרמטרים הנדרשים (רק פרמטרי OAuth בסיסיים)
-    token_params = {
+    # 1. הכנת פרמטרי OAuth בסיסיים (אלו הפרמטרים שיישלחו בבקשת ה-POST ויוחתמו)
+    token_params_post = {
         "grant_type": "authorization_code",
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
@@ -88,9 +92,11 @@ def callback():
         </div>
         """
 
-    # 3. חישוב החתימה (שימוש ב-MD5 הפשוטה)
-    calculated_sign, data_to_sign_raw = generate_md5_sign(token_params, CLIENT_SECRET)
-    token_params["sign"] = calculated_sign
+    # 3. חישוב החתימה (HMAC-SHA256 ללא secret במחרוזת)
+    calculated_sign, data_to_sign_raw = generate_hmac_sha256_sign(token_params_post, CLIENT_SECRET)
+    
+    # הוספת החתימה לפרמטרים הנשלחים ב-POST
+    token_params_post["sign"] = calculated_sign
     
     # 4. ביצוע בקשת ה-POST
     response = None
@@ -99,7 +105,7 @@ def callback():
     error_msg = "שגיאה לא ידועה."
 
     try:
-        response = requests.post(TOKEN_URL, data=token_params)
+        response = requests.post(TOKEN_URL, data=token_params_post)
         response_text = response.text
         tokens = response.json()
         
@@ -117,11 +123,11 @@ def callback():
         log_html = f"""
         <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
             <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
-            <p><strong>שיטת חתימה:</strong> <code>MD5 (TOP CLASSIC)</code></p>
+            <p><strong>שיטת חתימה:</strong> <code>HMAC-SHA256 (Final Attempt)</code></p>
             <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
             
             <h5>JSON שנשלח (Form Data):</h5>
-            <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(token_params, indent=2)}</pre>
+            <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(token_params_post, indent=2)}</pre>
 
             <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign):</h5>
             <pre style="background-color: #fce8e8; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
@@ -165,11 +171,11 @@ def callback():
         log_html = f"""
         <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
             <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
-            <p><strong>שיטת חתימה:</strong> <code>MD5 (TOP CLASSIC)</code></p>
+            <p><strong>שיטת חתימה:</strong> <code>HMAC-SHA256 (Final Attempt)</code></p>
             <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
             
             <h5>JSON שנשלח (Form Data):</h5>
-            <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(token_params, indent=2)}</pre>
+            <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(token_params_post, indent=2)}</pre>
 
             <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign):</h5>
             <pre style="background-color: #fce8e8; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
