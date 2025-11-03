@@ -1,21 +1,59 @@
 from flask import Flask, request
 import requests
 import os
+import hashlib
+import hmac
+import time
+from urllib.parse import urlencode # ייבוא לצורך קידוד הפרמטרים
 
 app = Flask(__name__)
 
 # ===== הגדרות שצריך למלא =====
-# **הערה: רצוי לשלוף את הנתונים הרגישים (כמו ה-SECRET) ממשתני סביבה ב-Render,
-# ולא לקודד אותם ישירות בקוד המקור.**
+# **הערה: רצוי לשלוף את הנתונים הרגישים (כמו ה-SECRET) ממשתני סביבה ב-Render.**
 CLIENT_ID = "520232"  # App Key שלך
 CLIENT_SECRET = "k0UqqVGIldwk5pZhMwGJGZOQhQpvZsf2"  # App Secret שלך
 REDIRECT_URI = "https://nerianet-render-callback-ali.onrender.com/callback"
 
-# שלב 1 – קישור לאימות
+# הגדרת כתובות ה-API
 AUTH_URL = (
     f"https://auth.aliexpress.com/oauth/authorize?"
     f"response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&state=1234"
 )
+TOKEN_URL = "https://oauth.aliexpress.com/token" # הכתובת הנכונה להחלפת קוד
+
+# --- פונקציה לחישוב חתימת API (Signature) ---
+# AliExpress דורשת חתימה קריפטוגרפית לכל בקשה
+def generate_sign(params, secret, api_url_path="/token"):
+    """
+    מחשבת חתימת HMAC-SHA256 ל-AliExpress API.
+    הנוסחה: SIGN = HMAC_SHA256(URL_PATH + סדר הפרמטרים, SECRET)
+    """
+    # 1. מיון הפרמטרים לפי סדר אלפביתי (ללא 'sign' אם קיים)
+    sorted_params = sorted(params.items())
+    
+    # 2. שרשור הפרמטרים
+    # הפורמט: key1value1key2value2...
+    concatenated_string = ""
+    for k, v in sorted_params:
+        # ודא שהערך הוא מחרוזת (בגלל ש-time.time() הוא מספר)
+        concatenated_string += f"{k}{str(v)}"
+    
+    # 3. הוספת נתיב ה-URL בתחילת המחרוזת
+    # שימו לב: הנתיב הנדרש עבור /token הוא '/token'
+    data_to_sign = api_url_path + concatenated_string
+    
+    # 4. חישוב חתימת HMAC-SHA256
+    hashed = hmac.new(
+        secret.encode('utf-8'),
+        data_to_sign.encode('utf-8'),
+        hashlib.sha256
+    )
+    
+    # 5. המרת התוצאה להקסה (hex) ורישום באותיות גדולות (Uppercase)
+    sign = hashed.hexdigest().upper()
+    return sign
+
+# --- Flask Routes ---
 
 @app.route('/')
 def index():
@@ -41,25 +79,29 @@ def callback():
         </div>
         """
 
-    # === שלב 2 – בקשת טוקנים (POST) ===
-    # התיקון בוצע כאן: שימוש בכתובת OAuth הנכונה להחלפת קוד.
-    token_url = "https://oauth.aliexpress.com/token" 
-    
-    data = {
+    # 1. הכנת הפרמטרים הנדרשים (כולל Timestamp)
+    # שימו לב: ה-client_secret לא נכנס למשתנה הזה
+    token_params = {
         "grant_type": "authorization_code",
         "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
         "code": code,
         "redirect_uri": REDIRECT_URI,
-        "need_refresh_token": "true"
+        "need_refresh_token": "true",
+        "timestamp": int(time.time() * 1000) # זמן נוכחי במילישניות
     }
-
+    
+    # 2. חישוב החתימה
+    # ה-client_secret נכנס לכאן
+    token_params["sign"] = generate_sign(token_params, CLIENT_SECRET, api_url_path='/token')
+    
+    # 3. ביצוע בקשת ה-POST
     response = None
     try:
-        # שליחת הבקשה להחלפת קוד האימות לטוקנים
-        response = requests.post(token_url, data=data)
+        # requests.post עם data=token_params שולח את הנתונים כ-Form Data (x-www-form-urlencoded)
+        response = requests.post(TOKEN_URL, data=token_params)
         response.raise_for_status() # מפעיל Exception אם הסטטוס הוא 4xx או 5xx
         tokens = response.json()
+        
     except Exception as e:
         error_message = f"❌ שגיאה בשליפת טוקנים: {e}"
         response_text = response.text if response is not None else "אין תגובה מהשרת."
@@ -80,7 +122,7 @@ def callback():
     refresh_token = tokens.get("refresh_token")
 
     if access_token and refresh_token:
-        # הצגת הטוקנים באופן ברור ועיצוב יפה
+        # הצגת הטוקנים
         return f"""
         <div style="font-family: Arial, sans-serif; text-align: center; padding: 30px; background-color: #e6ffe6; border: 1px solid #ccffcc; border-radius: 15px; box-shadow: 0 6px 12px rgba(40,167,69,0.2);">
             <h3 style="color: #28a745; font-size: 1.5em;">✅ קיבלת בהצלחה את הטוקנים!</h3>
