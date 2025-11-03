@@ -25,20 +25,23 @@ API_METHOD_PATH = "aliexpress.trade.auth.token.create"
 def generate_sign(params, secret, method_name):
     """
     מחשבת חתימת HMAC-SHA256 ל-AliExpress API.
-    הנוסחה: SIGN = HMAC_SHA256(API_METHOD_NAME + סדר הפרמטרים, SECRET)
+    הנוסחה: SIGN = HMAC_SHA256(SECRET, API_METHOD_NAME + סדר הפרמטרים)
     """
-    # 1. מיון הפרמטרים לפי סדר אלפביתי (ללא 'sign')
-    # חשוב: אנחנו לא מוציאים את client_secret כי הוא נשלח כעת גם בנתונים
-    params_for_sign = {k: v for k, v in params.items() if k != 'sign'}
+    # 1. מיון הפרמטרים לפי סדר אלפביתי (ללא 'sign' ו-client_secret)
+    # **שינוי קריטי:** הסרת client_secret ממחרוזת החתימה, גם אם הוא נשלח בבקשה.
+    params_for_sign = {
+        k: v for k, v in params.items() 
+        if k != 'sign' and k != 'client_secret'
+    }
     sorted_params = sorted(params_for_sign.items())
     
     # 2. שרשור הפרמטרים
     concatenated_string = ""
     for k, v in sorted_params:
+        # ודא שכל ערך מומר למחרוזת לפני השרשור
         concatenated_string += f"{k}{str(v)}"
     
     # 3. יצירת המחרוזת לחתימה: METHOD_NAME + CONCATENATED_PARAMS
-    # לפי תיעוד AliExpress, ה-Secret הוא המפתח ל-HMAC.
     data_to_sign = method_name + concatenated_string
     
     # 4. חישוב חתימת HMAC-SHA256
@@ -56,7 +59,6 @@ def generate_sign(params, secret, method_name):
 
 @app.route('/')
 def index():
-    # ... (HTML של דף הבית) ...
     return f'''
     <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f7f7f7; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
         <h2 style="color: #FF6600;">💡 התחברות ל-AliExpress API</h2>
@@ -72,7 +74,6 @@ def index():
 def callback():
     code = request.args.get('code')
     if not code:
-        # ... (שגיאה אם אין קוד) ...
         return """
         <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff0f0; border: 1px solid #ffdddd; border-radius: 10px;">
             <h3 style="color: #d9534f;">❌ שגיאה: לא התקבל קוד אימות</h3>
@@ -80,12 +81,11 @@ def callback():
         </div>
         """
 
-    # 1. הכנת הפרמטרים הנדרשים
-    # **שינוי קריטי:** הוספת client_secret בחזרה לנתונים הנשלחים, כדי להתאים לדרישה החריגה של Ali.
+    # 1. הכנת הפרמטרים הנדרשים (כולל client_secret בתוך הנתונים)
     token_params = {
         "grant_type": "authorization_code",
         "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET, # הוחזר לנתונים הנשלחים
+        "client_secret": CLIENT_SECRET, # נשלח ב-Form Data
         "code": code,
         "redirect_uri": REDIRECT_URI,
         "need_refresh_token": "true",
@@ -95,7 +95,7 @@ def callback():
     }
     
     # 2. חישוב החתימה
-    # generate_sign מחזירה כעת גם את המחרוזת הגולמית לחתימה
+    # generate_sign משתמשת ב-CLIENT_SECRET כמפתח, אך לא מכלילה אותו במחרוזת הנתונים שחותמים עליה.
     calculated_sign, data_to_sign_raw = generate_sign(token_params, CLIENT_SECRET, API_METHOD_PATH)
     token_params["sign"] = calculated_sign
     
@@ -112,22 +112,22 @@ def callback():
         
         # --- הצגת לוגים מפורטים בדפדפן ---
         log_html = f"""
-        <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px;">
-            <h4 style="color: #007bff;">נתוני דיבוג (DEBUG)</h4>
+        <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
+            <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
+            <p style="text-align: center;"><strong>שגיאה שהתקבלה:</strong> <code>{e}</code></p>
             <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
-            <p><strong>שגיאה שהתקבלה:</strong> <code>{e}</code></p>
-
+            
             <h5>JSON שנשלח (Form Data):</h5>
-            <pre style="text-align: left; background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(token_params, indent=2)}</pre>
+            <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(token_params, indent=2)}</pre>
 
             <h5>מחרוזת גולמית לחתימה (Data to Sign):</h5>
-            <pre style="text-align: left; background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
+            <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
             
             <h5>החתימה שחושבה (Calculated SIGN):</h5>
             <code style="display: block; background-color: #e0e0ff; padding: 5px; border-radius: 3px; font-weight: bold; word-break: break-all;">{calculated_sign}</code>
 
             <h5>תוכן התגובה הגולמי:</h5>
-            <pre style="text-align: left; background-color: #fdd; padding: 10px; border-radius: 5px; overflow-x: auto;">{response_text}</pre>
+            <pre style="background-color: #fdd; padding: 10px; border-radius: 5px; overflow-x: auto;">{response_text}</pre>
         </div>
         """
         
@@ -139,7 +139,6 @@ def callback():
         """
 
     # ... (קוד הצלחה אם מתקבלים טוקנים) ...
-    # ... (הקוד של הצגת הטוקנים נשאר זהה) ...
     access_token = tokens.get("access_token")
     refresh_token = tokens.get("refresh_token")
 
