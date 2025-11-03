@@ -20,22 +20,21 @@ AUTH_URL = (
 )
 # כתובת ה-REST ל-TOP API:
 TOKEN_URL = "https://api-sg.aliexpress.com/rest" 
-# פורמט ה-PATH כפי שמופיע בדוגמאות ה-SDK:
-API_METHOD_PATH = "/auth/token/create" 
+# !!! התיקון: חזרה לשם המתודה המלא לצורך חתימה מושלמת !!!
+API_METHOD_FULL_NAME = "aliexpress.trade.auth.token.create" 
 
 # --- פונקציה לחישוב חתימת API (Signature) באמצעות HMAC-SHA256 ---
 def generate_top_sign(params, secret):
     """
     מחשבת חתימת HMAC-SHA256 על פי פרוטוקול TOP API של Alibaba.
     
-    !!! תיקון: מסננים החוצה גם את 'method' בעת חישוב החתימה,
-    מכיוון שהשגיאה IncompleteSignature מעידה על כך שבפורמט /path/to/api,
-    ה'method' אינו חלק מה-string לחתימה.
+    !!! תיקון: כל פרמטרי ה-TOP (כולל 'method') נכללים במחרוזת החתימה הממוינת.
     """
     # 1. סינון פרמטרים לחתימה
+    # 'method' נשאר בפנים.
     params_to_sign = {
         k: v for k, v in params.items() 
-        if k not in ['sign', 'client_secret', 'sign_method', 'method'] # <<-- הוספת 'method' לסינון
+        if k not in ['sign', 'client_secret', 'sign_method'] 
     }
     
     # 2. מיון הפרמטרים לפי סדר אלפביתי
@@ -46,7 +45,7 @@ def generate_top_sign(params, secret):
     for k, v in sorted_params:
         concatenated_string += f"{k}{str(v)}"
 
-    # 4. יצירת המחרוזת לחישוב
+    # 4. יצירת המחרוזת לחישוב (המתודה נמצאת בתוכה)
     data_to_sign_raw = concatenated_string
     
     # 5. חישוב חתימת HMAC-SHA256
@@ -101,7 +100,7 @@ def callback():
         # 1. הכנת פרמטרי ה-TOP API
         token_params_post = {
             "app_key": CLIENT_ID, 
-            "method": API_METHOD_PATH, # /auth/token/create - נשלח לגוף הבקשה, אבל לא נחתם
+            "method": API_METHOD_FULL_NAME, # !!! תיקון: המתודה המלאה !!!
             "timestamp": str(int(time.time() * 1000)),
             "v": "2.0",
             "sign_method": "HMAC_SHA256",
@@ -112,8 +111,11 @@ def callback():
             "need_refresh_token": "true",
         }
         
-        # 2. חישוב החתימה (ללא method)
-        calculated_sign, data_to_sign_raw = generate_top_sign(token_params_post, CLIENT_SECRET)
+        # 2. חישוב החתימה (כולל method בשם המלא)
+        calculated_sign, data_to_sign_raw = generate_top_sign(
+            token_params_post, 
+            CLIENT_SECRET
+        )
         token_params_post["sign"] = calculated_sign
         
         # 3. הכנת הנתונים לבקשה (שליחת הכל ב-POST)
@@ -132,7 +134,8 @@ def callback():
             error_msg = tokens.get('msg', tokens.get('sub_msg', 'Error in error_response'))
             raise Exception(error_msg)
         
-        # ניתוח התגובה המוצלחת
+        # ניתוח התגובה המוצלחת (חיפוש הטוקנים)
+        # מכיוון שמבנה התגובה משתנה:
         if 'access_token' in full_response:
              tokens = full_response
         else:
@@ -156,14 +159,14 @@ def callback():
     log_html = f"""
     <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
         <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
-        <p><strong>שיטת חתימה:</strong> <code>TOP API HMAC-SHA256 (Final Signature Fix - No 'method')</code></p>
+        <p><strong>שיטת חתימה:</strong> <code>TOP API HMAC-SHA256 (Final Attempt - Full Method Name)</code></p>
         <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
-        <p><strong>Method (נשלח, לא נחתם):</strong> <code>{API_METHOD_PATH}</code></p>
+        <p><strong>Method (שם מלא):</strong> <code>{API_METHOD_FULL_NAME}</code></p>
         
         <h5>JSON שנשלח (Form Data - ללא client_secret):</h5>
         <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(post_data, indent=2)}</pre>
 
-        <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign - ללא 'method'):</h5>
+        <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign - כולל 'method' בשם מלא):</h5>
         <pre style="background-color: #fce8e8; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
         
         <h5>החתימה שחושבה (Calculated SIGN):</h5>
