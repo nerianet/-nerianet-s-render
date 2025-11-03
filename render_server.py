@@ -27,11 +27,15 @@ API_METHOD_PATH = "/auth/token/create"
 def generate_top_sign(params, secret):
     """
     מחשבת חתימת HMAC-SHA256 על פי פרוטוקול TOP API של Alibaba.
+    
+    !!! תיקון: מסננים החוצה גם את 'method' בעת חישוב החתימה,
+    מכיוון שהשגיאה IncompleteSignature מעידה על כך שבפורמט /path/to/api,
+    ה'method' אינו חלק מה-string לחתימה.
     """
     # 1. סינון פרמטרים לחתימה
     params_to_sign = {
         k: v for k, v in params.items() 
-        if k not in ['sign', 'client_secret', 'sign_method'] 
+        if k not in ['sign', 'client_secret', 'sign_method', 'method'] # <<-- הוספת 'method' לסינון
     }
     
     # 2. מיון הפרמטרים לפי סדר אלפביתי
@@ -83,15 +87,13 @@ def callback():
         </div>
         """
 
-    # --- התיקון: אתחול משתנים לפני בלוק ה-try ---
+    # --- אתחול משתנים ---
     post_data = {}
     data_to_sign_raw = ""
     calculated_sign = "N/A"
     response_text = "אין תגובה מהשרת."
     error_msg = "שגיאה לא ידועה."
     tokens = {}
-    
-    # משתנה ה-log_html חייב להיות מוגדר כדי למנוע את שגיאת ה-UnboundLocalError
     log_html = """<div style="margin-top: 20px; text-align: center; color: #999;">Error log could not be generated due to severe crash.</div>""" 
     # -----------------------------------------------------------------
 
@@ -99,7 +101,7 @@ def callback():
         # 1. הכנת פרמטרי ה-TOP API
         token_params_post = {
             "app_key": CLIENT_ID, 
-            "method": API_METHOD_PATH, # /auth/token/create
+            "method": API_METHOD_PATH, # /auth/token/create - נשלח לגוף הבקשה, אבל לא נחתם
             "timestamp": str(int(time.time() * 1000)),
             "v": "2.0",
             "sign_method": "HMAC_SHA256",
@@ -110,11 +112,11 @@ def callback():
             "need_refresh_token": "true",
         }
         
-        # 2. חישוב החתימה
+        # 2. חישוב החתימה (ללא method)
         calculated_sign, data_to_sign_raw = generate_top_sign(token_params_post, CLIENT_SECRET)
         token_params_post["sign"] = calculated_sign
         
-        # 3. הכנת הנתונים לבקשה
+        # 3. הכנת הנתונים לבקשה (שליחת הכל ב-POST)
         post_data = {k: v for k, v in token_params_post.items() if k != 'client_secret'}
         
         # 4. ביצוע בקשת ה-POST
@@ -145,25 +147,23 @@ def callback():
              error_msg = tokens.get('message', tokens.get('error_msg', 'Token not found in expected structure'))
              raise Exception(error_msg)
         
-        # בדיקת סטטוס HTTP
         response.raise_for_status() 
         
     except Exception as e:
         error_msg = str(e)
-        # זרימה לבלוק ה-except
         
-    # --- בניית HTML לדיבוג (בנפרד מה-try/except) ---
+    # --- בניית HTML לדיבוג ---
     log_html = f"""
     <div style="margin-top: 20px; border-top: 2px dashed #ccc; padding-top: 15px; text-align: left;">
         <h4 style="color: #007bff; text-align: center;">נתוני דיבוג (DEBUG)</h4>
-        <p><strong>שיטת חתימה:</strong> <code>TOP API HMAC-SHA256 (Final Structural Fix)</code></p>
+        <p><strong>שיטת חתימה:</strong> <code>TOP API HMAC-SHA256 (Final Signature Fix - No 'method')</code></p>
         <p><strong>URL של הבקשה:</strong> <code>{TOKEN_URL}</code></p>
-        <p><strong>Method (תיקון!):</strong> <code>{API_METHOD_PATH}</code></p>
+        <p><strong>Method (נשלח, לא נחתם):</strong> <code>{API_METHOD_PATH}</code></p>
         
         <h5>JSON שנשלח (Form Data - ללא client_secret):</h5>
         <pre style="background-color: #eee; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap;">{json.dumps(post_data, indent=2)}</pre>
 
-        <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign):</h5>
+        <h5 style="color: #d9534f;">מחרוזת גולמית לחתימה (Data to Sign - ללא 'method'):</h5>
         <pre style="background-color: #fce8e8; padding: 10px; border-radius: 5px; overflow-x: auto; word-break: break-all;">{data_to_sign_raw}</pre>
         
         <h5>החתימה שחושבה (Calculated SIGN):</h5>
@@ -194,7 +194,6 @@ def callback():
         """
     else:
         # שגיאה: אם נזרקה חריגה (e) או אם חסרים טוקנים למרות שהבקשה עברה
-        # נציג את הודעת השגיאה (error_msg) עם נתוני הדיבוג
         return f"""
         <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #fff0f0; border: 1px solid #ffdddd; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
             <h3 style="color: #d9534f;">❌ שגיאה בשליפת טוקנים: {error_msg}</h3>
