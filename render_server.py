@@ -34,7 +34,7 @@ def generate_hmac_sha256_sign(params, secret, method_name):
     # אין לכלול את client_secret או sign במחרוזת לחתימה.
     params_to_sign = {
         k: v for k, v in params.items() 
-        if k not in ['sign', 'client_secret', 'method'] 
+        if k not in ['sign', 'client_secret'] 
     }
     
     # 2. מיון הפרמטרים לפי סדר אלפביתי
